@@ -1,0 +1,195 @@
+---
+- name: Install Newsboat from source
+  hosts: all
+  become: yes
+  vars:
+    target_version: "2.40"
+    git_tag: "r{{ target_version }}"
+    install_dir: "/usr/local/src/newsboat"
+    repo_url: "https://github.com/newsboat/newsboat.git"
+    current_version: "not installed"
+
+  tasks:
+    - name: Check if Newsboat is already installed
+      command: newsboat --version
+      register: newsboat_installed
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Debug newsboat command output
+      debug:
+        msg: "newsboat --version rc: {{ newsboat_installed.rc }}, stdout: {{ newsboat_installed.stdout | default('no output') }}, stderr: {{ newsboat_installed.stderr | default('no output') }}"
+      when: ansible_check_mode == false
+
+    - name: Create temporary file for version output
+      tempfile:
+        state: file
+        suffix: newsboat_version
+      register: temp_file
+      changed_when: false
+      when: newsboat_installed.rc == 0
+
+    - name: Write newsboat version output to temporary file
+      copy:
+        content: "{{ newsboat_installed.stdout }}"
+        dest: "{{ temp_file.path }}"
+      when: newsboat_installed.rc == 0
+
+    - name: Check Newsboat version with grep
+      command: grep -F "Newsboat r{{ target_version }}" "{{ temp_file.path }}"
+      register: grep_output
+      failed_when: false
+      changed_when: false
+      when: newsboat_installed.rc == 0
+
+    - name: Debug grep output
+      debug:
+        msg: "grep rc: {{ grep_output.rc | default('not run') }}, stdout: {{ grep_output.stdout | default('empty') }}"
+      when: ansible_check_mode == false
+
+    - name: Set current version fact
+      set_fact:
+        current_version: "{{ (newsboat_installed.rc == 0 and grep_output.rc == 0) | ternary(target_version, 'not installed') }}"
+      failed_when: false
+
+    - name: Remove temporary file
+      file:
+        path: "{{ temp_file.path }}"
+        state: absent
+      when: newsboat_installed.rc == 0
+
+    - name: Debug version info
+      debug:
+        msg: "Current version: {{ current_version }}, Target: {{ target_version }}"
+      when: ansible_check_mode == false
+
+    - name: Check if repository exists and is up-to-date
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ install_dir }}"
+        version: "{{ git_tag }}"
+        force: yes
+        update: yes
+      register: git_clone
+      when: current_version != target_version
+
+    - name: Debug git clone result
+      debug:
+        msg: "Git clone changed: {{ git_clone.changed | default('not run') }}"
+      when: current_version != target_version and ansible_check_mode == false
+
+    - name: Remove existing Newsboat and Podboat binaries if version mismatch or repo updated
+      block:
+        - name: Find newsboat binary
+          command: which newsboat
+          register: newsboat_path
+          ignore_errors: yes
+          changed_when: false
+          when: current_version != target_version
+
+        - name: Remove newsboat binary
+          file:
+            path: "{{ newsboat_path.stdout }}"
+            state: absent
+          when: current_version != target_version and newsboat_path.rc == 0
+
+        - name: Find podboat binary
+          command: which podboat
+          register: podboat_path
+          ignore_errors: yes
+          changed_when: false
+          when: current_version != target_version
+
+        - name: Remove podboat binary
+          file:
+            path: "{{ podboat_path.stdout }}"
+            state: absent
+          when: current_version != target_version and podboat_path.rc == 0
+      when: git_clone.changed or current_version != target_version
+
+    - name: Install build dependencies
+      apt:
+        name:
+          - git
+          - build-essential
+          - pkg-config
+          - libcurl4-openssl-dev
+          - libssl-dev
+          - libxml2-dev
+          - libjson-c-dev
+          - libncursesw5-dev
+          - libsqlite3-dev
+          - gettext
+          - libstfl-dev
+          - asciidoctor
+        state: present
+        update_cache: yes
+      when: git_clone.changed or current_version != target_version
+
+    - name: Install Rust using rustup
+      shell: |
+        export RUSTUP_INIT_SKIP_PATH_CHECK=yes
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      args:
+        executable: /bin/bash
+      register: rustup_install
+      when: git_clone.changed or current_version != target_version
+      changed_when: rustup_install.rc == 0
+
+    - name: Add cargo bin to PATH
+      lineinfile:
+        path: /root/.bashrc
+        line: 'export PATH="$HOME/.cargo/bin:$PATH"'
+        state: present
+      when: git_clone.changed or current_version != target_version
+
+    - name: Set environment for subsequent tasks
+      set_fact:
+        cargo_path: "/root/.cargo/bin"
+      when: git_clone.changed or current_version != target_version
+
+    - name: Create installation directory
+      file:
+        path: "{{ install_dir }}"
+        state: directory
+        mode: '0755'
+      when: git_clone.changed or current_version != target_version
+
+    - name: Clean any existing build artifacts
+      make:
+        chdir: "{{ install_dir }}"
+        target: clean
+      ignore_errors: yes
+      when: git_clone.changed or current_version != target_version
+
+    - name: Generate config.mk
+      command: make config.mk
+      args:
+        chdir: "{{ install_dir }}"
+      when: git_clone.changed or current_version != target_version
+
+    - name: Build Newsboat
+      make:
+        chdir: "{{ install_dir }}"
+        target: all
+      environment:
+        PATH: "{{ cargo_path }}:{{ ansible_env.PATH }}"
+      when: git_clone.changed or current_version != target_version
+
+    - name: Install Newsboat
+      make:
+        chdir: "{{ install_dir }}"
+        target: install
+      environment:
+        PATH: "{{ cargo_path }}:{{ ansible_env.PATH }}"
+      when: git_clone.changed or current_version != target_version
+
+    - name: Verify installation
+      command: newsboat --version
+      register: installation_result
+      when: git_clone.changed or current_version != target_version
+
+    - name: Show installation result
+      debug:
+        msg: "{{ installation_result.stdout }}"
+      when: git_clone.changed or current_version != target_version

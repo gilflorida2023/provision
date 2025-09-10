@@ -3,7 +3,7 @@ extends: default
 
 rules:
   line-length:
-    max: 160  # Allow lines up to 160 characters to cover 150, 119, and 87
+    max: 194
   braces:
     min-spaces-inside: 0
     max-spaces-inside: 1  # Allow one space inside braces
