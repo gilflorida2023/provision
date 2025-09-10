@@ -1,0 +1,15 @@
+---
+- name: Check Zig version on all machines
+  hosts: all
+  tasks:
+    - name: Run zig version
+      ansible.builtin.command: /usr/local/bin/zig version
+      register: zig_version_check
+      changed_when: false
+      failed_when: zig_version_check.rc != 0
+
+    - name: Display Zig version
+      ansible.builtin.debug:
+        msg: >-
+          Zig version on {{ inventory_hostname }}:
+          {{ zig_version_check.stdout }}

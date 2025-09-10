@@ -1,0 +1,154 @@
+---
+- name: Install Zig 0.15.1 from source
+  hosts: all
+  become: true
+  vars:
+    zig_version: "0.15.1"
+    zig_source_dir: "/usr/local/src/zig"
+    llvm_version: "20"
+    llvm_apt_repo: "deb [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-{{ llvm_version }} main"
+
+  tasks:
+    - name: Ensure required packages are installed
+      ansible.builtin.apt:
+        name:
+          - wget
+          - git
+          - cmake
+          - g++
+          - zlib1g-dev
+          - libzstd-dev
+          - libxml2-dev
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Create directory for LLVM GPG key
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download LLVM GPG key
+      ansible.builtin.shell:
+        cmd: curl -sSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /etc/apt/keyrings/llvm.gpg
+        creates: /etc/apt/keyrings/llvm.gpg
+      changed_when: true
+
+    - name: Set permissions for LLVM GPG key
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/llvm.gpg
+        mode: '0644'
+
+    - name: Add LLVM APT repository
+      ansible.builtin.apt_repository:
+        repo: "{{ llvm_apt_repo }}"
+        state: present
+        filename: llvm
+        update_cache: true
+
+    - name: Remove old LLVM versions
+      ansible.builtin.apt:
+        name:
+          - llvm-14
+          - llvm-14-dev
+          - clang-14
+          - lld-14
+          - llvm-18
+          - llvm-18-dev
+          - clang-18
+          - lld-18
+        state: absent
+        purge: true
+
+    - name: Remove stray llvm-config symlink
+      ansible.builtin.file:
+        path: /usr/bin/llvm-config
+        state: absent
+
+    - name: Install LLVM 20 and dependencies
+      ansible.builtin.apt:
+        name:
+          - llvm-{{ llvm_version }}-dev
+          - clang-{{ llvm_version }}
+          - lld-{{ llvm_version }}
+          - liblld-{{ llvm_version }}-dev
+          - libclang-{{ llvm_version }}-dev
+        state: present
+        force: true
+        update_cache: true
+
+    - name: Create Zig source directory
+      ansible.builtin.file:
+        path: "{{ zig_source_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Clone Zig repository
+      ansible.builtin.git:
+        repo: https://github.com/ziglang/zig.git
+        dest: "{{ zig_source_dir }}"
+        version: "{{ zig_version }}"
+        depth: 1
+
+    - name: Create Zig build directory
+      ansible.builtin.file:
+        path: "{{ zig_source_dir }}/build"
+        state: directory
+        mode: '0755'
+
+    - name: Clean Zig build directory
+      ansible.builtin.shell:
+        cmd: rm -rf *
+        chdir: "{{ zig_source_dir }}/build"
+      changed_when: true
+
+    - name: Run CMake for Zig
+      ansible.builtin.command:
+        cmd: >
+          cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
+          -DLLVM_CONFIG_EXECUTABLE=/usr/bin/llvm-config-{{ llvm_version }}
+          -DCLANG_INCLUDE_DIRS=/usr/lib/llvm-{{ llvm_version }}/include
+          -DLLD_INCLUDE_DIRS=/usr/lib/llvm-{{ llvm_version }}/include
+          -DLLD_LIBRARIES=/usr/lib/llvm-{{ llvm_version }}/lib/liblldCommon.a
+          -DCMAKE_CXX_FLAGS="-I/usr/lib/llvm-{{ llvm_version }}/include"
+        chdir: "{{ zig_source_dir }}/build"
+
+    - name: Build Zig
+      ansible.builtin.command:
+        cmd: make -j{{ ansible_processor_vcpus }}
+        chdir: "{{ zig_source_dir }}/build"
+
+    - name: Install Zig
+      ansible.builtin.command:
+        cmd: make install
+        chdir: "{{ zig_source_dir }}/build"
+      ignore_errors: true
+
+    - name: Find Zig binary
+      ansible.builtin.command:
+        cmd: find {{ zig_source_dir }} -type f -name zig -executable
+      register: zig_binary_path
+      changed_when: false
+      failed_when: zig_binary_path.rc != 0 or zig_binary_path.stdout == ""
+
+    - name: Copy Zig binary to /usr/local/bin
+      ansible.builtin.copy:
+        src: "{{ zig_binary_path.stdout_lines[0] }}"
+        dest: /usr/local/bin/zig
+        mode: '0755'
+        remote_src: true
+      when: zig_binary_path.stdout_lines | length > 0
+
+    - name: Verify Zig binary in /usr/local/bin
+      ansible.builtin.stat:
+        path: /usr/local/bin/zig
+      register: zig_binary
+      failed_when: not zig_binary.stat.exists
+
+    - name: Verify Zig version
+      ansible.builtin.command: /usr/local/bin/zig version
+      register: zig_version_check
+      changed_when: false
+      failed_when: zig_version_check.rc != 0 or zig_version_check.stdout != zig_version

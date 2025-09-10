@@ -1,0 +1,10 @@
+---
+- name: Install yt-dlp on all machines
+  hosts: all
+  become: true
+  tasks:
+    - name: Install yt-dlp
+      ansible.builtin.apt:
+        name: yt-dlp
+        state: present
+        update_cache: true

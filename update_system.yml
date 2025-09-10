@@ -1,0 +1,40 @@
+---
+- name: Update and upgrade system packages on all machines
+  hosts: all
+  become: true
+  tasks:
+    - name: Run apt-get update
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      register: apt_update
+      changed_when: apt_update.cache_updated
+
+    - name: Run apt-get upgrade
+      ansible.builtin.apt:
+        upgrade: safe
+        state: latest
+      register: apt_upgrade
+      changed_when: apt_upgrade.changed
+
+    - name: Run apt-get dist-upgrade
+      ansible.builtin.apt:
+        upgrade: dist
+        state: latest
+      register: apt_dist_upgrade
+      changed_when: apt_dist_upgrade.changed
+
+    - name: Run apt-get autoremove
+      ansible.builtin.apt:
+        autoremove: true
+      register: apt_autoremove
+      changed_when: apt_autoremove.changed
+
+    - name: Display update results
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          update={{ apt_update.cache_updated }},
+          upgrade={{ apt_upgrade.changed }},
+          dist-up={{ apt_dist_upgrade.changed }},
+          autoremove={{ apt_autoremove.changed }}
