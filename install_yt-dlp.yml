@@ -1,0 +1,64 @@
+---
+- name: Install latest yt-dlp binary and remove old version
+  hosts: localhost
+  become: true
+  vars:
+    bin_path: "/usr/local/bin/yt-dlp"
+    
+  tasks:
+    - name: Remove old yt-dlp version installed via apt
+      package:
+        name: yt-dlp
+        state: absent
+
+    - name: Remove any broken or old yt-dlp binary in /usr/bin
+      file:
+        path: /usr/bin/yt-dlp
+        state: absent
+
+    - name: Get latest release info from GitHub API
+      uri:
+        url: https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest
+        method: GET
+        return_content: yes
+      register: release_info
+      changed_when: false
+
+    - name: Extract latest version tag
+      set_fact:
+        latest_version: "{{ release_info.json.tag_name }}"
+
+    - name: Debug latest version
+      debug:
+        msg: "Latest yt-dlp version: {{ latest_version }}"
+
+    - name: Download yt-dlp binary
+      get_url:
+        url: "https://github.com/yt-dlp/yt-dlp/releases/download/{{ latest_version }}/yt-dlp"
+        dest: "{{ bin_path }}"
+        mode: '0755'
+        force: yes
+
+    - name: Verify installation
+      command: "{{ bin_path }} --version"
+      register: ytdlp_version
+      changed_when: false
+
+    - name: Display installed version
+      debug:
+        msg: "Successfully installed yt-dlp version {{ ytdlp_version.stdout }}"
+
+    - name: Check which yt-dlp is in PATH
+      command: which yt-dlp
+      register: which_ytdlp
+      changed_when: false
+
+    - name: Display which yt-dlp is being used
+      debug:
+        msg: "yt-dlp command is pointing to: {{ which_ytdlp.stdout }}"
+
+    - name: Warn user about shell hash
+      debug:
+        msg: |
+          If you still get 'No such file or directory' for /usr/bin/yt-dlp, 
+          run 'hash -r' in your terminal to clear the cached command location.
