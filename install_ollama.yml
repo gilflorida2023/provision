@@ -9,7 +9,6 @@
     control_node_download_dir: "/opt/ansible_downloads/ollama"
     managed_node_download_dir: "/var/cache/ollama"
     managed_node_download_path: "/var/cache/ollama/ollama-linux-amd64.tgz"
-    control_node: "machine3"
 
   tasks:
     # --- CONTROL NODE TASKS (run once) ---
@@ -27,7 +26,7 @@
         latest_version: "{{ ollama_release.json.tag_name }}"
         download_url: "{{ item.browser_download_url }}"
       loop: "{{ ollama_release.json.assets }}"
-      when: "'llama-linux-amd64.tgz' in item.name"
+      when: "'ollama-linux-amd64.tgz' in item.name"
       loop_control:
         label: "{{ item.name }}"
 
@@ -60,7 +59,18 @@
           args:
             creates: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
 
+    # Set control node hostname as a fact (works with older Ansible versions)
+    - name: Set control node hostname
+      delegate_to: localhost
+      run_once: true
+      set_fact:
+        control_node_host: "{{ ansible_hostname }}"
+
     # --- MANAGED NODE TASKS (run on each host) ---
+    - name: Determine if current host is the control node
+      set_fact:
+        is_control_node: "{{ inventory_hostname == control_node_host }}"
+
     - name: Find all Ollama binaries not in correct location
       shell: |
         find / -name ollama -type f -executable 2>/dev/null | grep -v "{{ install_path }}/ollama" | sort
@@ -103,14 +113,14 @@
       ignore_errors: yes
 
     - name: Copy Ollama package from control node to managed node (for remote nodes)
-      when: install_required and inventory_hostname != control_node
+      when: install_required and not is_control_node
       copy:
         src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
         dest: "{{ managed_node_download_path }}"
         mode: '0644'
 
     - name: Create symlink to package on control node
-      when: install_required and inventory_hostname == control_node
+      when: install_required and is_control_node
       file:
         src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
         dest: "{{ managed_node_download_path }}"
