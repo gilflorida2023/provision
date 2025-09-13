@@ -1,6 +1,6 @@
 ---
 - name: Get detailed CPU information from /proc/cpuinfo
-  hosts: localhost
+  hosts: all  # Run on all hosts in inventory
   gather_facts: false
   tasks:
     - name: Read and parse /proc/cpuinfo
@@ -12,7 +12,7 @@
         VENDOR=$(grep -m1 "vendor_id" /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//')
         
         # Get number of physical cores
-        PHYSICAL_CORES=$(grep -c "core id" /proc/cpuinfo | uniq)
+        PHYSICAL_CORES=$(grep "core id" /proc/cpuinfo | sort -u | wc -l)
         
         # Get number of CPU threads (vCPUs)
         VCPUS=$(grep -c processor /proc/cpuinfo)
@@ -30,25 +30,15 @@
       register: cpu_info
       changed_when: false
 
-    - name: Set CPU facts
-      set_fact:
-        processor_model: "{{ cpu_info.stdout | from_json | json_query('model') }}"
-        processor_vendor: "{{ cpu_info.stdout | from_json | json_query('vendor') }}"
-        physical_cores: "{{ cpu_info.stdout | from_json | json_query('physical_cores') }}"
-        vcpus: "{{ cpu_info.stdout | from_json | json_query('vcpus') }}"
-        cpu_family: "{{ cpu_info.stdout | from_json | json_query('family') }}"
-        cpu_model_num: "{{ cpu_info.stdout | from_json | json_query('model_num') }}"
-        cpu_stepping: "{{ cpu_info.stdout | from_json | json_query('stepping') }}"
-        cache_size: "{{ cpu_info.stdout | from_json | json_query('cache_size') }}"
-
     - name: Display detailed CPU information
       debug:
         msg:
-          - "Processor Vendor: {{ processor_vendor }}"
-          - "Processor Model: {{ processor_model }}"
-          - "Physical Cores: {{ physical_cores }}"
-          - "vCPUs/Threads: {{ vcpus }}"
-          - "CPU Family: {{ cpu_family }}"
-          - "CPU Model Number: {{ cpu_model_num }}"
-          - "CPU Stepping: {{ cpu_stepping }}"
-          - "Cache Size: {{ cache_size }}"
+          - "Host: {{ inventory_hostname }}"
+          - "Processor Vendor: {{ (cpu_info.stdout | from_json).vendor }}"
+          - "Processor Model: {{ (cpu_info.stdout | from_json).model }}"
+          - "Physical Cores: {{ (cpu_info.stdout | from_json).physical_cores }}"
+          - "vCPUs/Threads: {{ (cpu_info.stdout | from_json).vcpus }}"
+          - "CPU Family: {{ (cpu_info.stdout | from_json).family }}"
+          - "CPU Model Number: {{ (cpu_info.stdout | from_json).model_num }}"
+          - "CPU Stepping: {{ (cpu_info.stdout | from_json).stepping }}"
+          - "Cache Size: {{ (cpu_info.stdout | from_json).cache_size }}"
