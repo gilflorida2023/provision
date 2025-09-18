@@ -56,7 +56,6 @@
           - jq
           - vlc
           - rustc  # rust package name in Debian/Ubuntu
-          - rustfmt  # rustlint equivalent
-          - yamllint
+          - ufw
         state: present
         update_cache: yes
