@@ -1,0 +1,62 @@
+---
+- name: Install Brave browser and other essential packages
+  hosts: all
+  become: yes  # Enables sudo privileges
+  tasks:
+    # Brave Browser Installation
+    - name: Check if Brave browser is installed
+      command: dpkg-query -W brave-browser
+      register: brave_check
+      failed_when: false
+      changed_when: false
+      check_mode: no
+
+    - name: Install curl for Brave installation
+      apt:
+        name: curl
+        state: present
+        update_cache: yes
+      when: brave_check.rc != 0
+
+    - name: Add Brave browser GPG key
+      get_url:
+        url: https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+        dest: /usr/share/keyrings/brave-browser-archive-keyring.gpg
+        mode: '0644'
+      when: brave_check.rc != 0
+
+    - name: Add Brave browser repository
+      get_url:
+        url: https://brave-browser-apt-release.s3.brave.com/brave-browser.sources
+        dest: /etc/apt/sources.list.d/brave-browser-release.sources
+        mode: '0644'
+      when: brave_check.rc != 0
+
+    - name: Update apt cache for Brave
+      apt:
+        update_cache: yes
+      when: brave_check.rc != 0
+
+    - name: Install Brave browser
+      apt:
+        name: brave-browser
+        state: present
+      when: brave_check.rc != 0
+
+    # Install other packages if not already installed
+    - name: Install essential packages
+      apt:
+        name:
+          - pass
+          - git
+          - htop
+          - terminator
+          - vim
+          - gawk
+          - jq
+          - vlc
+          - rustc  # rust package name in Debian/Ubuntu
+          - rustfmt  # rustlint equivalent
+          - yamllint
+        state: present
+        update_cache: yes
