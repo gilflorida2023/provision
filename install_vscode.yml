@@ -1,0 +1,52 @@
+---
+- name: Install Visual Studio Code on Debian
+  hosts: all
+  become: yes  # Enables sudo privileges
+  tasks:
+    - name: Check if VS Code is installed
+      command: dpkg-query -W code
+      register: vscode_check
+      failed_when: false
+      changed_when: false
+      check_mode: no
+
+    - name: Install prerequisites (curl, apt-transport-https)
+      apt:
+        name:
+          - curl
+          - apt-transport-https
+        state: present
+        update_cache: yes
+      when: vscode_check.rc != 0
+
+    - name: Check if Microsoft GPG key exists
+      stat:
+        path: /usr/share/keyrings/microsoft-archive-keyring.asc
+      register: gpg_key_stat
+      when: vscode_check.rc != 0
+
+    - name: Add Microsoft GPG key for VS Code
+      shell: curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /usr/share/keyrings/microsoft-archive-keyring.asc
+      args:
+        creates: /usr/share/keyrings/microsoft-archive-keyring.asc
+      when: vscode_check.rc != 0 and not gpg_key_stat.stat.exists
+
+    - name: Set permissions for Microsoft GPG key
+      file:
+        path: /usr/share/keyrings/microsoft-archive-keyring.asc
+        mode: '0644'
+      when: vscode_check.rc != 0
+
+    - name: Add VS Code repository
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-archive-keyring.asc] https://packages.microsoft.com/repos/code stable main"
+        state: present
+        filename: vscode
+        update_cache: yes
+      when: vscode_check.rc != 0
+
+    - name: Install VS Code
+      apt:
+        name: code
+        state: present
+      when: vscode_check.rc != 0

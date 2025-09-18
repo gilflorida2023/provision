@@ -55,6 +55,7 @@
           - gawk
           - jq
           - vlc
+          - xclip
           - rustc  # rust package name in Debian/Ubuntu
           - ufw
         state: present
