@@ -1,0 +1,67 @@
+---
+- name: Configure UFW on all hosts
+  hosts: all
+  become: yes
+  tasks:
+    - name: Check current UFW status
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+      check_mode: no
+
+    - name: Reset UFW only if rules are incorrect
+      ansible.builtin.command: ufw --force reset
+      when:
+        - ufw_status.stdout is defined
+        - ufw_status.stdout_lines | select('match', 'Status: active') | list | length > 0
+        - ufw_status.stdout_lines | select('match', '22/tcp.*ALLOW.*') | list | length < groups['all'] | length or
+          ufw_status.stdout_lines | select('match', '11434/tcp.*ALLOW.*') | list | length < groups['all'] | length
+      register: ufw_reset
+      changed_when: ufw_reset.rc == 0
+
+    - name: Allow SSH (port 22) from each inventory host
+      ansible.builtin.ufw:
+        rule: allow
+        from_ip: "{{ hostvars[item]['ansible_host'] }}"
+        port: 22
+        proto: tcp
+      loop: "{{ groups['all'] }}"
+      when:
+        - hostvars[item]['ansible_host'] is defined
+        - ufw_status.stdout is defined
+        - "'22/tcp.*ALLOW.*{{ hostvars[item]['ansible_host'] }}' not in ufw_status.stdout"
+      register: ufw_ssh_rule
+      changed_when: ufw_ssh_rule.changed
+
+    - name: Allow port 11434 from each inventory host
+      ansible.builtin.ufw:
+        rule: allow
+        from_ip: "{{ hostvars[item]['ansible_host'] }}"
+        port: 11434
+        proto: tcp
+      loop: "{{ groups['all'] }}"
+      when:
+        - hostvars[item]['ansible_host'] is defined
+        - ufw_status.stdout is defined
+        - "'11434/tcp.*ALLOW.*{{ hostvars[item]['ansible_host'] }}' not in ufw_status.stdout"
+      register: ufw_11434_rule
+      changed_when: ufw_11434_rule.changed
+
+    - name: Set UFW default policy to deny incoming
+      ansible.builtin.ufw:
+        direction: incoming
+        policy: deny
+      when:
+        - ufw_status.stdout is defined
+        - "'default deny (incoming)' not in ufw_status.stdout"
+      register: ufw_policy
+      changed_when: ufw_policy.changed
+
+    - name: Enable UFW only if disabled
+      ansible.builtin.ufw:
+        state: enabled
+      when:
+        - ufw_status.stdout is defined
+        - "'Status: inactive' in ufw_status.stdout"
+      register: ufw_enable
+      changed_when: ufw_enable.changed
