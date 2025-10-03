@@ -105,8 +105,24 @@
       set_fact:
         install_required: "{{ not correct_binary.stat.exists or (correct_binary_version.stdout != latest_version | regex_replace('^v', '')) }}"
 
-    - name: Stop Ollama service if installation required
-      when: install_required
+    # Check if Ollama service exists before making any systemctl calls
+    - name: Check if Ollama service exists
+      stat:
+        path: "{{ service_path }}"
+      register: ollama_service_exists
+      changed_when: false
+
+    - name: Check if Ollama service is running
+      when: ollama_service_exists.stat.exists
+      systemd:
+        name: ollama
+        state: started
+      register: ollama_service_status
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Stop Ollama service if installation required and service exists
+      when: install_required and ollama_service_exists.stat.exists
       systemd:
         name: ollama
         state: stopped
@@ -134,8 +150,41 @@
       args:
         executable: /bin/bash
 
-    - name: Start Ollama service after installation
-      when: install_required
+    # Create user and group
+    - name: Create Ollama group
+      group:
+        name: ollama
+        state: present
+        system: yes
+
+    - name: Create Ollama user
+      user:
+        name: ollama
+        group: ollama
+        system: yes
+        home: "/usr/share/ollama"
+        create_home: yes
+        shell: /bin/false
+
+    - name: Set ownership of Ollama binary and home directory
+      file:
+        path: "{{ item }}"
+        owner: ollama
+        group: ollama
+        mode: '0755'
+      loop:
+        - "{{ install_path }}/ollama"
+        - "/usr/share/ollama"
+
+    # Deploy systemd service using your template
+    - name: Deploy systemd service using template
+      template:
+        src: "ollama.service.j2"
+        dest: "{{ service_path }}"
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Start and enable Ollama service
       systemd:
         name: ollama
         state: started
@@ -165,33 +214,19 @@
         path: "{{ managed_node_download_path }}"
         state: absent
 
-    - name: Create Ollama group
-      group:
+    - name: Verify Ollama service is running
+      systemd:
         name: ollama
-        state: present
-        system: yes
+        state: started
+      register: service_status
+      changed_when: false
 
-    - name: Create Ollama user
-      user:
-        name: ollama
-        group: ollama
-        system: yes
-        home: "/usr/share/ollama"
-        create_home: yes
-        shell: /bin/false
-
-    - name: Check if service file exists
-      stat:
-        path: "{{ service_path }}"
-      register: service_file
-
-    - name: Deploy systemd service (only if missing)
-      when: not service_file.stat.exists
-      template:
-        src: ollama.service.j2
-        dest: "{{ service_path }}"
-        mode: '0644'
-      notify: Reload systemd
+    - name: Show service status
+      debug:
+        msg: |
+          Ollama service file exists: {{ ollama_service_exists.stat.exists }}
+          Ollama service is {{ 'running' if service_status.status.ActiveState == 'active' else 'not running' }}
+          Service path: {{ service_path }}
 
   handlers:
     - name: Reload systemd

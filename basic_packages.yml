@@ -1,51 +1,47 @@
 ---
 - name: Install Brave browser and other essential packages
   hosts: all
-  become: yes  # Enables sudo privileges
+  become: yes
   tasks:
     # Brave Browser Installation
     - name: Check if Brave browser is installed
-      command: dpkg-query -W brave-browser
+      ansible.builtin.command: which brave-browser
       register: brave_check
       failed_when: false
       changed_when: false
-      check_mode: no
 
-    - name: Install curl for Brave installation
-      apt:
-        name: curl
-        state: present
-        update_cache: yes
+    - name: Install Brave browser prerequisites
+      block:
+        - name: Install curl
+          ansible.builtin.apt:
+            name: curl
+            state: present
+
+        - name: Add Brave browser repository key
+          ansible.builtin.apt_key:
+            url: https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+            state: present
+
+        - name: Add Brave browser repository
+          ansible.builtin.apt_repository:
+            repo: "deb [arch=amd64] https://brave-browser-apt-release.s3.brave.com/ stable main"
+            state: present
+            filename: brave-browser
+
+        - name: Install Brave browser
+          ansible.builtin.apt:
+            name: brave-browser
+            state: present
+            update_cache: yes
       when: brave_check.rc != 0
 
-    - name: Add Brave browser GPG key
-      get_url:
-        url: https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
-        dest: /usr/share/keyrings/brave-browser-archive-keyring.gpg
-        mode: '0644'
-      when: brave_check.rc != 0
+    - name: Display Brave status
+      ansible.builtin.debug:
+        msg: "{{ 'Brave browser installed' if brave_check.rc == 0 else 'Brave browser was just installed' }}"
 
-    - name: Add Brave browser repository
-      get_url:
-        url: https://brave-browser-apt-release.s3.brave.com/brave-browser.sources
-        dest: /etc/apt/sources.list.d/brave-browser-release.sources
-        mode: '0644'
-      when: brave_check.rc != 0
-
-    - name: Update apt cache for Brave
-      apt:
-        update_cache: yes
-      when: brave_check.rc != 0
-
-    - name: Install Brave browser
-      apt:
-        name: brave-browser
-        state: present
-      when: brave_check.rc != 0
-
-    # Install other packages if not already installed
+    # Install other essential packages
     - name: Install essential packages
-      apt:
+      ansible.builtin.apt:
         name:
           - pass
           - git
@@ -56,7 +52,25 @@
           - jq
           - vlc
           - xclip
-          - rustc  # rust package name in Debian/Ubuntu
+          - rustc
           - ufw
         state: present
         update_cache: yes
+
+    # Configure UFW
+    - name: Configure UFW firewall
+      block:
+        - name: Enable UFW
+          ansible.builtin.ufw:
+            state: enabled
+            policy: deny
+
+        - name: Allow SSH
+          ansible.builtin.ufw:
+            rule: allow
+            name: OpenSSH
+      when: ansible_facts.os_family == "Debian"
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: "All packages installed and configured on {{ inventory_hostname }}"
