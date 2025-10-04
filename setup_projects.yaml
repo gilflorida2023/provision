@@ -1,0 +1,11 @@
+---
+- name: Add path to remote .bashrc (idempotent)
+  hosts: machine2
+  tasks:
+    - name: Ensure path is in .bashrc without duplicates
+      lineinfile:
+        path: ".bashrc"
+        regex: '^export PATH="\$PATH:~/projects/bin"$'
+        line: 'export PATH="$PATH:~/projects/bin"'
+        create: yes
+        state: present

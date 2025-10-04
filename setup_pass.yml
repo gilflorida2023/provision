@@ -1,0 +1,95 @@
+---
+- name: Password Store Setup Playbook
+  hosts: all
+  become: yes
+  vars:
+    password_store_repo: "git@github.com:gilflorida2023/passwords.git"
+    password_store_dir: "~{{ ansible_user }}/.password-store"
+
+  pre_tasks:
+    - name: Fail if no control host is defined in inventory
+      fail:
+        msg: "No control host defined in inventory. Must have at least one host with 'is_control_host: true'"
+      when: hostvars | dict2items | selectattr('value.is_control_host', 'defined') | selectattr('value.is_control_host') | list | length == 0
+      run_once: true
+      delegate_to: localhost
+
+    - name: Abort if running on control host (old machine)
+      fail:
+        msg: "This playbook should only run on new machines, not the control host ({{ inventory_hostname }})"
+      when: is_control_host is defined and is_control_host
+
+  tasks:
+    - name: Install pass and git
+      ansible.builtin.apt:
+        name:
+          - git
+          - pass
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    # Clone password store repository using SSH
+    - name: Clone password store repository (as normal user)
+      ansible.builtin.git:
+        repo: "{{ password_store_repo }}"
+        dest: "{{ password_store_dir }}"
+        update: no
+        accept_hostkey: yes
+        key_file: "~{{ ansible_user }}/.ssh/id_rsa"
+      become: no  # Run as the normal user, not root
+      register: git_clone_result
+      ignore_errors: yes
+
+    - name: Check if clone failed due to SSH key issues
+      debug:
+        msg: |
+          Git clone failed - SSH key may not be set up for GitHub.
+          Please ensure the SSH public key for user '{{ ansible_user }}' on {{ inventory_hostname }} 
+          is added to your GitHub account at: https://github.com/settings/keys
+          
+          You can get the public key with: cat ~{{ ansible_user }}/.ssh/id_rsa.pub
+      when: git_clone_result is failed
+
+    - name: Set correct permissions on password store
+      ansible.builtin.file:
+        path: "{{ password_store_dir }}"
+        state: directory
+        mode: '0700'
+        recurse: yes
+      become: no  # Run as the normal user, not root
+      when: git_clone_result is succeeded
+
+    - name: Verify password store structure
+      ansible.builtin.command: pass ls
+      register: pass_list
+      changed_when: false
+      ignore_errors: yes
+      become: no  # Run as the normal user, not root
+      when: git_clone_result is succeeded
+
+    - name: Display setup status
+      ansible.builtin.debug:
+        msg: |
+          {% if git_clone_result is succeeded %}
+          ✅ SUCCESS: Password store cloned to {{ password_store_dir }}
+          {% else %}
+          ❌ SETUP INCOMPLETE: Password store not cloned
+          {% endif %}
+          
+          Next steps:
+          1. {% if git_clone_result is failed %}Fix SSH key setup and re-run playbook{% else %}Manually transfer GPG keys from old machine{% endif %}
+          2. Import the GPG keys:
+             gpg --import public.gpg
+             gpg --import private.gpg
+          3. Set trust level:
+             gpg --edit-key gilflorida2023@gmail.com
+             Then enter: trust, 5, y, save
+          4. Test with: pass ls
+
+          {% if git_clone_result is failed %}
+          To fix SSH key issue:
+          - Check if SSH key exists: ls -la ~{{ ansible_user }}/.ssh/
+          - If not, generate one: ssh-keygen -t rsa -b 4096 -C "{{ ansible_user }}@{{ inventory_hostname }}" -f ~{{ ansible_user }}/.ssh/id_rsa -N ""
+          - Add to GitHub: cat ~{{ ansible_user }}/.ssh/id_rsa.pub
+          {% endif %}
