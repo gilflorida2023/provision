@@ -24,6 +24,7 @@
       run_once: true
       set_fact:
         latest_version: "{{ ollama_release.json.tag_name }}"
+        latest_version_clean: "{{ ollama_release.json.tag_name | regex_replace('^v', '') }}"
         download_url: "{{ item.browser_download_url }}"
       loop: "{{ ollama_release.json.assets }}"
       when: "'ollama-linux-amd64.tgz' in item.name"
@@ -45,19 +46,35 @@
         path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
       register: existing_download
 
-    - name: Download Ollama package to control node (if needed)
+    - name: Install aria2 on control node (if needed)
+      delegate_to: localhost
+      run_once: true
+      when: not existing_download.stat.exists
+      package:
+        name: aria2
+        state: present
+
+    - name: Download Ollama package to control node using aria2c (if needed)
       delegate_to: localhost
       run_once: true
       when: not existing_download.stat.exists
       block:
-        - name: Download with curl
+        - name: Download with aria2c (4 threads, continue on failure)
           command:
             cmd: >
-              curl -L --retry 3 --retry-delay 5
-              -o "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
+              aria2c --continue=true --max-tries=3 --retry-wait=5 --split=4 --max-connection-per-server=4
+              -d "{{ control_node_download_dir }}"
+              -o "ollama-{{ latest_version }}-linux-amd64.tgz"
               "{{ download_url }}"
           args:
             creates: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
+          register: aria2c_download
+          ignore_errors: yes
+
+        - name: Verify download completed successfully
+          fail:
+            msg: "Failed to download Ollama package with aria2c after multiple attempts"
+          when: aria2c_download is failed or aria2c_download.rc != 0
 
     # Set control node hostname as a fact (works with older Ansible versions)
     - name: Set control node hostname
@@ -71,162 +88,199 @@
       set_fact:
         is_control_node: "{{ inventory_hostname == control_node_host }}"
 
-    - name: Find all Ollama binaries not in correct location
-      shell: |
-        find / -name ollama -type f -executable 2>/dev/null | grep -v "{{ install_path }}/ollama" | sort
-      register: wrong_location_binaries
-      changed_when: false
-
-    - name: Remove all Ollama binaries in wrong locations
-      when: wrong_location_binaries.stdout_lines | length > 0
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop: "{{ wrong_location_binaries.stdout_lines }}"
-
-    - name: Create cache directory on managed nodes
-      file:
-        path: "{{ managed_node_download_dir }}"
-        state: directory
-        mode: '0755'
-
-    - name: Check if correct binary exists and get version
+    # First, try to get the current version from the binary
+    - name: Check if Ollama binary exists in correct location
       stat:
         path: "{{ install_path }}/ollama"
-      register: correct_binary
+      register: ollama_binary
 
-    - name: Get version from correct binary
-      when: correct_binary.stat.exists
-      shell: "{{ install_path }}/ollama --version | head -n 1 | grep -o '[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+' || echo 'version-check-failed'"
-      register: correct_binary_version
+    - name: Get current Ollama version if binary exists
+      when: ollama_binary.stat.exists
+      command: "{{ install_path }}/ollama --version"
+      register: ollama_version_output
       changed_when: false
+      ignore_errors: yes
 
-    - name: Set installation flag
+    - name: Extract clean version from output
+      when: ollama_binary.stat.exists and ollama_version_output is success
       set_fact:
-        install_required: "{{ not correct_binary.stat.exists or (correct_binary_version.stdout != latest_version | regex_replace('^v', '')) }}"
+        current_version_clean: "{{ ollama_version_output.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') | default('unknown') }}"
 
-    # Check if Ollama service exists before making any systemctl calls
+    # Check service status
     - name: Check if Ollama service exists
       stat:
         path: "{{ service_path }}"
       register: ollama_service_exists
       changed_when: false
 
-    - name: Check if Ollama service is running
+    - name: Check current Ollama service status
       when: ollama_service_exists.stat.exists
       systemd:
         name: ollama
         state: started
-      register: ollama_service_status
+      register: current_service_status
       changed_when: false
       ignore_errors: yes
 
-    - name: Stop Ollama service if installation required and service exists
-      when: install_required and ollama_service_exists.stat.exists
+    # Determine what actions are needed - split into multiple tasks to avoid variable reference issues
+    - name: Set install required flag
+      set_fact:
+        install_required: "{{ not ollama_binary.stat.exists or (current_version_clean | default('unknown') != latest_version_clean) }}"
+
+    - name: Set service needs start flag
+      set_fact:
+        service_needs_start: "{{ ollama_service_exists.stat.exists and current_service_status is defined and current_service_status.status.ActiveState != 'active' }}"
+
+    - name: Set service needs creation flag
+      set_fact:
+        service_needs_creation: "{{ not ollama_service_exists.stat.exists or install_required }}"
+
+    - name: Debug state information
+      debug:
+        msg: |
+          Binary exists: {{ ollama_binary.stat.exists }}
+          Current version: {{ current_version_clean | default('unknown') }}
+          Latest version: {{ latest_version_clean }}
+          Install required: {{ install_required }}
+          Service exists: {{ ollama_service_exists.stat.exists }}
+          Service needs start: {{ service_needs_start }}
+          Service needs creation: {{ service_needs_creation }}
+        verbosity: 1
+
+    # --- HAPPY PATH: Just ensure service is running ---
+    - name: Ensure Ollama service is running (happy path)
+      when: not install_required and service_needs_start
       systemd:
         name: ollama
-        state: stopped
-      ignore_errors: yes
+        state: started
+        enabled: yes
 
-    - name: Copy Ollama package from control node to managed node (for remote nodes)
-      when: install_required and not is_control_node
-      copy:
-        src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
-        dest: "{{ managed_node_download_path }}"
-        mode: '0644'
+    # --- INSTALLATION PATH: Only run if installation is actually needed ---
+    - block:
+        - name: Find all Ollama binaries not in correct location
+          shell: |
+            find / -name ollama -type f -executable 2>/dev/null | grep -v "{{ install_path }}/ollama" | sort
+          register: wrong_location_binaries
+          changed_when: false
 
-    - name: Create symlink to package on control node
-      when: install_required and is_control_node
-      file:
-        src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
-        dest: "{{ managed_node_download_path }}"
-        state: link
+        - name: Remove all Ollama binaries in wrong locations
+          when: wrong_location_binaries.stdout_lines | length > 0
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop: "{{ wrong_location_binaries.stdout_lines }}"
 
-    - name: Extract Ollama binary to correct location
+        - name: Stop Ollama service if it exists
+          when: ollama_service_exists.stat.exists
+          systemd:
+            name: ollama
+            state: stopped
+          ignore_errors: yes
+
+        - name: Create cache directory on managed nodes
+          file:
+            path: "{{ managed_node_download_dir }}"
+            state: directory
+            mode: '0755'
+
+        - name: Copy Ollama package from control node to managed node (for remote nodes)
+          when: not is_control_node
+          copy:
+            src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
+            dest: "{{ managed_node_download_path }}"
+            mode: '0644'
+
+        - name: Create symlink to package on control node
+          when: is_control_node
+          file:
+            src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
+            dest: "{{ managed_node_download_path }}"
+            state: link
+
+        - name: Extract Ollama binary to correct location
+          shell: |
+            tar -C /usr/local -xzf "{{ managed_node_download_path }}"
+            chmod 755 "{{ install_path }}/ollama"
+          args:
+            executable: /bin/bash
+
       when: install_required
-      shell: |
-        tar -C /usr/local -xzf "{{ managed_node_download_path }}"
-        chmod 755 "{{ install_path }}/ollama"
-      args:
-        executable: /bin/bash
 
-    # Create user and group
-    - name: Create Ollama group
-      group:
-        name: ollama
-        state: present
-        system: yes
+    # --- SERVICE SETUP (only if service doesn't exist or we installed) ---
+    - block:
+        - name: Create Ollama group
+          group:
+            name: ollama
+            state: present
+            system: yes
 
-    - name: Create Ollama user
-      user:
-        name: ollama
-        group: ollama
-        system: yes
-        home: "/usr/share/ollama"
-        create_home: yes
-        shell: /bin/false
+        - name: Create Ollama user
+          user:
+            name: ollama
+            group: ollama
+            system: yes
+            home: "/usr/share/ollama"
+            create_home: yes
+            shell: /bin/false
 
-    - name: Set ownership of Ollama binary and home directory
-      file:
-        path: "{{ item }}"
-        owner: ollama
-        group: ollama
-        mode: '0755'
-      loop:
-        - "{{ install_path }}/ollama"
-        - "/usr/share/ollama"
+        - name: Set ownership of Ollama binary and home directory
+          file:
+            path: "{{ item }}"
+            owner: ollama
+            group: ollama
+            mode: '0755'
+          loop:
+            - "{{ install_path }}/ollama"
+            - "/usr/share/ollama"
 
-    # Deploy systemd service using your template
-    - name: Deploy systemd service using template
-      template:
-        src: "ollama.service.j2"
-        dest: "{{ service_path }}"
-        mode: '0644'
-      notify: Reload systemd
+        - name: Deploy systemd service using template
+          template:
+            src: "ollama.service.j2"
+            dest: "{{ service_path }}"
+            mode: '0644'
+          notify: Reload systemd
 
+      when: service_needs_creation
+
+    # --- FINAL SERVICE MANAGEMENT ---
     - name: Start and enable Ollama service
       systemd:
         name: ollama
         state: started
         enabled: yes
 
-    - name: Verify binary location and version
+    # --- VERIFICATION AND CLEANUP ---
+    - name: Verify installation if we installed
       when: install_required
-      shell: |
-        # Wait a moment for the service to fully start
-        sleep 2
-        if [ -f "{{ install_path }}/ollama" ]; then
-          {{ install_path }}/ollama --version | head -n 1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' || echo "version-check-failed"
-        else
-          echo "not-found"
-        fi
-      register: verified_version
+      command: "{{ install_path }}/ollama --version"
+      register: post_install_version
       changed_when: false
 
-    - name: Fail if binary not correct after installation
-      when: install_required and (verified_version.stdout != latest_version | regex_replace('^v', '') or verified_version.stdout == "not-found")
-      fail:
-        msg: "Failed to install Ollama correctly. Expected version {{ latest_version }}, got {{ verified_version.stdout }}"
+    - name: Extract clean version from post-install output
+      when: install_required
+      set_fact:
+        post_install_version_clean: "{{ post_install_version.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') | default('unknown') }}"
 
-    - name: Clean up downloaded package
+    - name: Validate installed version
+      when: 
+        - install_required
+        - post_install_version_clean != latest_version_clean
+      fail:
+        msg: "Failed to install correct Ollama version. Expected {{ latest_version_clean }}, got {{ post_install_version_clean }}"
+
+    - name: Clean up downloaded package from managed nodes
       when: install_required
       file:
         path: "{{ managed_node_download_path }}"
         state: absent
 
-    - name: Verify Ollama service is running
-      systemd:
-        name: ollama
-        state: started
-      register: service_status
-      changed_when: false
-
-    - name: Show service status
+    - name: Show final status
       debug:
         msg: |
-          Ollama service file exists: {{ ollama_service_exists.stat.exists }}
-          Ollama service is {{ 'running' if service_status.status.ActiveState == 'active' else 'not running' }}
-          Service path: {{ service_path }}
+          Ollama binary: {{ 'present' if ollama_binary.stat.exists else 'absent' }}
+          Ollama version: {{ current_version_clean | default('unknown') }}
+          Service status: {{ 'running' if current_service_status is defined and current_service_status.status.ActiveState == 'active' else 'not running' }}
+          Actions taken: {{ 'installed and configured' if install_required else 'verified and started' }}
 
   handlers:
     - name: Reload systemd

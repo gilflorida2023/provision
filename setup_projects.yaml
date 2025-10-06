@@ -1,6 +1,10 @@
 ---
 - name: Add path to remote .bashrc (idempotent)
-  hosts: machine2
+  hosts: all
+  vars:
+    projects_bin_repo : "git@github.com:gilflorida2023/bin.git"
+    projects_bin_dir : "~{{ ansible_user }}/projects/bin"
+
   tasks:
     - name: Ensure path is in .bashrc without duplicates
       lineinfile:
@@ -9,3 +13,17 @@
         line: 'export PATH="$PATH:~/projects/bin"'
         create: yes
         state: present
+
+    # Clone repository using SSH
+    - name: Clone password store repository (as normal user)
+      ansible.builtin.git:
+        repo: "{{ projects_bin_repo }}"
+        dest: "{{ projects_bin_dir }}"
+        update: no
+        accept_hostkey: yes
+        key_file: "~{{ ansible_user }}/.ssh/id_rsa"
+      become: no  # Run as the normal user, not root
+      register: git_clone_result
+      ignore_errors: yes
+
+
