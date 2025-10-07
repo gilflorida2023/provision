@@ -1,0 +1,24 @@
+---
+- name: Check UFW status and configuration
+  hosts: all
+  become: yes
+  tasks:
+    - name: Get UFW status verbose
+      ansible.builtin.command: ufw status verbose
+      register: ufw_verbose
+
+    - name: Get UFW status numbered (shows all rules clearly)
+      ansible.builtin.command: ufw status numbered
+      register: ufw_numbered
+
+    - name: Display UFW verbose status
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} UFW Status ===
+          {{ ufw_verbose.stdout }}
+
+    - name: Display UFW numbered rules
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} UFW Rules ===
+          {{ ufw_numbered.stdout }}
