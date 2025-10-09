@@ -1,0 +1,26 @@
+---
+- name: Check UFW configuration in detail
+  hosts: all
+  become: yes
+  tasks:
+    - name: Get UFW status
+      ansible.builtin.command: ufw status numbered
+      register: ufw_status
+
+    - name: Show UFW rules files
+      ansible.builtin.shell: |
+        echo "=== user.rules ==="
+        cat /etc/ufw/user.rules
+        echo "=== user6.rules ==="  
+        cat /etc/ufw/user6.rules
+      register: ufw_rules_files
+
+    - name: Display UFW status
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }} UFW Status:
+          {{ ufw_status.stdout }}
+
+    - name: Display UFW rule files
+      ansible.builtin.debug:
+        msg: "{{ ufw_rules_files.stdout }}"

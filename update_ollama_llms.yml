@@ -1,0 +1,58 @@
+---
+- name: Update Ollama models sequentially on limited hosts
+  hosts: "{{ target_hosts | default('all') }}"
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: Check if Ollama is installed
+      command: which ollama
+      register: ollama_check
+      changed_when: false
+      ignore_errors: yes
+      
+    - name: Fail if Ollama is not available
+      fail:
+        msg: "Ollama is not installed or not in PATH on {{ inventory_hostname }}"
+      when: ollama_check.rc != 0
+    
+    - name: Get list of installed Ollama models
+      shell: |
+        ollama list | awk 'NR>1 {print $1}'
+      register: model_list
+      changed_when: false
+      
+    - name: Display models found for update
+      debug:
+        msg: "Found {{ model_list.stdout_lines | length }} models to update on {{ inventory_hostname }}: {{ model_list.stdout_lines }}"
+      when: model_list.stdout_lines | length > 0
+      
+    - name: Update each Ollama model (shell version)
+      shell: |
+        echo "--- Pulling {{ item }} ---"
+        ollama pull "{{ item }}"
+        echo "--- Done with {{ item }} ---"
+      args:
+        executable: /bin/bash
+      loop: "{{ model_list.stdout_lines }}"
+      loop_control:
+        label: "{{ item }}"
+      when: model_list.stdout_lines | length > 0
+      register: update_results
+      async: 3600  # 1 hour timeout for large models
+      poll: 0  # Fire and forget - we'll check status later
+      
+    - name: Wait for all model updates to complete
+      async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ update_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      register: async_results
+      until: async_results.finished
+      retries: 300  # 300 retries = 300 * 10s = 50 minutes
+      delay: 10  # Check every 10 seconds
+      when: update_results is defined and update_results.results is defined
+      
+    - name: Show final status
+      debug:
+        msg: "All Ollama model updates completed on {{ inventory_hostname }}"

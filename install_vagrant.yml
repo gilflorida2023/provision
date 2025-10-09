@@ -1,0 +1,67 @@
+---
+- name: Install latest Vagrant on Debian-based systems (e.g., Linux Mint)
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    target_arch: amd64
+  tasks:
+    - name: Fetch Vagrant releases page using curl
+      shell: curl -s https://releases.hashicorp.com/vagrant/
+      register: releases_page
+      changed_when: false
+
+    - name: Extract latest version from releases page
+      set_fact:
+        latest_version: "{{ (releases_page.stdout | regex_findall('vagrant/([0-9\\.]+)/') | first) }}"
+
+    - name: Get current Vagrant version
+      command: vagrant --version
+      register: current_version_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Parse current version
+      set_fact:
+        current_version: "{{ current_version_raw.stdout | regex_replace('^Vagrant ([0-9]+\\.[0-9]+\\.[0-9]+).*', '\\1') }}"
+      when: current_version_raw.rc == 0
+
+    - name: Determine if installation or upgrade is needed
+      set_fact:
+        needs_install: "{{ current_version_raw.rc != 0 or (current_version_raw.rc == 0 and current_version != latest_version) }}"
+
+    - name: Remove existing Vagrant if wrong version
+      apt:
+        name: vagrant
+        state: absent
+        purge: yes
+      when:
+        - needs_install
+        - current_version_raw.rc == 0
+
+    - name: Download latest Vagrant .deb package using curl
+      shell: curl -L -o /tmp/vagrant_{{ latest_version }}-1_{{ target_arch }}.deb https://releases.hashicorp.com/vagrant/{{ latest_version }}/vagrant_{{ latest_version }}-1_{{ target_arch }}.deb
+      args:
+        creates: "/tmp/vagrant_{{ latest_version }}-1_{{ target_arch }}.deb"
+      when: needs_install
+
+    - name: Install Vagrant from .deb
+      apt:
+        deb: "/tmp/vagrant_{{ latest_version }}-1_{{ target_arch }}.deb"
+        state: present
+      when: needs_install
+
+    - name: Clean up downloaded .deb file
+      file:
+        path: "/tmp/vagrant_{{ latest_version }}-1_{{ target_arch }}.deb"
+        state: absent
+      when: needs_install
+
+    - name: Verify installation
+      command: vagrant --version
+      register: verify_version
+      changed_when: false
+
+    - name: Display installed version
+      debug:
+        msg: "Vagrant version installed: {{ verify_version.stdout }}"
