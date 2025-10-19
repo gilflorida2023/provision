@@ -133,7 +133,7 @@
 
     - name: Set service needs creation flag
       set_fact:
-        service_needs_creation: "{{ not ollama_service_exists.stat.exists or install_required }}"
+        service_needs_creation: "{{ not ollama_service_exists.stat.exists }}"
 
     - name: Debug state information
       debug:
