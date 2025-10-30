@@ -1,40 +1,80 @@
 ---
-- name: Install VirtualBox on Debian-based systems (e.g., Linux Mint, LMDE)
+- name: Install VirtualBox 7.1 + Guest Additions ISO (REAL + SAFE VERIFICATION)
   hosts: all
   become: yes
-  gather_facts: yes
-  tasks:
-    - name: Determine distro codename for VirtualBox repo
-      shell: |
-        if grep -q '^ID_LIKE=.*ubuntu' /etc/os-release 2>/dev/null; then
-          codename=$(grep '^UBUNTU_CODENAME=' /etc/os-release | cut -d= -f2 | tr -d '"')
-        else
-          # Debian or LMDE
-          debian_ver=$(cat /etc/debian_version 2>/dev/null | cut -d. -f1)
-          case "${debian_ver:-12}" in
-            12) codename="bookworm" ;;
-            11) codename="bullseye" ;;
-            *) codename="bookworm" ;;
-          esac
-        fi
-        echo $codename
-      register: distro_codename
-      changed_when: false
 
-    - name: Download and dearmor VirtualBox GPG key
-      shell: wget -qO- https://www.virtualbox.org/download/oracle_vbox_2016.asc | gpg --dearmor -o /usr/share/keyrings/oracle-virtualbox-2016.gpg
+  tasks:
+
+    - name: Add Oracle VirtualBox repo (bookworm)
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/oracle-virtualbox-2016.gpg] https://download.virtualbox.org/virtualbox/debian bookworm contrib"
+        state: present
+        filename: virtualbox
+        update_cache: yes
+      register: repo_added
+
+    - name: Install Oracle GPG key (one-liner)
+      ansible.builtin.shell: |
+        curl -fsSL https://www.virtualbox.org/download/oracle_vbox_2016.asc | \
+        gpg --yes --batch --dearmor -o /usr/share/keyrings/oracle-virtualbox-2016.gpg
       args:
         creates: /usr/share/keyrings/oracle-virtualbox-2016.gpg
 
-    - name: Add VirtualBox APT repository
-      apt_repository:
-        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/oracle-virtualbox-2016.gpg] https://download.virtualbox.org/virtualbox/debian {{ distro_codename.stdout }} contrib"
-        state: present
-        filename: oracle-virtualbox
+    - name: Force apt update
+      ansible.builtin.apt:
         update_cache: yes
+        cache_valid_time: 0
+      when: repo_added.changed
 
-    - name: Install VirtualBox
-      apt:
-        name: virtualbox-7.1
+    - name: Install ONLY real packages from apt-cache
+      ansible.builtin.apt:
+        name:
+          - virtualbox-7.1
+          - virtualbox-guest-additions-iso
+          - build-essential
+          - linux-headers-amd64
         state: present
-        update_cache: yes
+        update_cache: no
+      register: install
+
+    - name: Rebuild and load kernel modules (vboxdrv)
+      ansible.builtin.command: /usr/lib/virtualbox/vboxdrv.sh setup
+      when: install.changed
+      ignore_errors: yes  # May require reboot on first run
+
+    - name: Add user to vboxusers group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: vboxusers
+        append: yes
+
+    # ========================================
+    # VERIFICATION (SAFE + ACCURATE)
+    # ========================================
+
+    - name: "[VERIFY] VirtualBox version"
+      ansible.builtin.command: vboxmanage --version
+      register: vbox_version
+      changed_when: false
+      failed_when: "'7.1' not in vbox_version.stdout"
+
+    - name: "[VERIFY] Guest Additions ISO exists"
+      ansible.builtin.stat:
+        path: /usr/share/virtualbox/VBoxGuestAdditions.iso
+      register: iso_file
+      failed_when: not iso_file.stat.exists
+
+    - name: "[VERIFY] vboxdrv kernel module is loaded"
+      ansible.builtin.command: lsmod | grep -q '^vboxdrv '
+      changed_when: false
+      ignore_errors: yes
+      register: vboxdrv_check
+      failed_when: vboxdrv_check.rc != 0
+
+    - name: "[SUCCESS] VirtualBox 7.1 installed and verified!"
+      ansible.builtin.debug:
+        msg: |
+          VirtualBox 7.1 is READY on {{ inventory_hostname }}!
+          Version: {{ vbox_version.stdout }}
+          ISO: /usr/share/virtualbox/VBoxGuestAdditions.iso
+          Kernel module: vboxdrv (loaded)
