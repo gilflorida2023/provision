@@ -76,12 +76,19 @@
             msg: "Failed to download Ollama package with aria2c after multiple attempts"
           when: aria2c_download is failed or aria2c_download.rc != 0
 
-    # Set control node hostname as a fact (works with older Ansible versions)
-    - name: Set control node hostname
-      delegate_to: localhost
+    # PROPER CONTROL NODE IDENTIFICATION
+    - name: Find control host from inventory
       run_once: true
       set_fact:
-        control_node_host: "{{ ansible_hostname }}"
+        control_node_host: "{{ item }}"
+      loop: "{{ ansible_play_hosts }}"
+      when: hostvars[item].is_control_host | default(false)
+
+    - name: Set default control host if none specified
+      run_once: true
+      set_fact:
+        control_node_host: "{{ ansible_play_hosts[0] }}"
+      when: control_node_host is not defined
 
     # --- MANAGED NODE TASKS (run on each host) ---
     - name: Determine if current host is the control node
@@ -145,6 +152,8 @@
           Service exists: {{ ollama_service_exists.stat.exists }}
           Service needs start: {{ service_needs_start }}
           Service needs creation: {{ service_needs_creation }}
+          Is control node: {{ is_control_node }}
+          Control node host: {{ control_node_host }}
         verbosity: 1
 
     # --- HAPPY PATH: Just ensure service is running ---
@@ -190,12 +199,13 @@
             dest: "{{ managed_node_download_path }}"
             mode: '0644'
 
-        - name: Create symlink to package on control node
+        - name: Copy package to cache directory on control node
           when: is_control_node
-          file:
+          copy:
             src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
             dest: "{{ managed_node_download_path }}"
-            state: link
+            mode: '0644'
+            remote_src: yes
 
         - name: Extract Ollama binary to correct location
           shell: |

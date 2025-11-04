@@ -1,18 +1,18 @@
 ---
 all:
   hosts:
-    machine1:
+    ryzen:
       ansible_host: 192.168.0.10
       ansible_user: ryzen
       ansible_ssh_private_key_file: ~/.ssh/id_rsa
       ansible_python_interpreter: /usr/bin/python3
-    machine2:
+    fast:
       ansible_host: 192.168.0.5
       ansible_user: fast
       ansible_ssh_private_key_file: ~/.ssh/id_rsa
       ansible_python_interpreter: /usr/bin/python3
       is_control_host: true 
-    machine4:
+    speedy:
       ansible_host: 192.168.0.8
       ansible_user: speedy
       ansible_ssh_private_key_file: ~/.ssh/id_rsa
