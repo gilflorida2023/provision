@@ -3,38 +3,30 @@
   hosts: all
   become: true
   tasks:
-    - name: Run apt-get update
+    - name: Update package cache
       ansible.builtin.apt:
-        update_cache: true
+        update_cache: yes
         cache_valid_time: 3600
       register: apt_update
       changed_when: apt_update.cache_updated
 
-    - name: Run apt-get upgrade
+    - name: Full system upgrade (safe + handles dependency changes)
       ansible.builtin.apt:
-        upgrade: safe
-        state: latest
+        upgrade: full
+        autoclean: yes
       register: apt_upgrade
       changed_when: apt_upgrade.changed
 
-    - name: Run apt-get dist-upgrade
+    - name: Remove unused packages
       ansible.builtin.apt:
-        upgrade: dist
-        state: latest
-      register: apt_dist_upgrade
-      changed_when: apt_dist_upgrade.changed
-
-    - name: Run apt-get autoremove
-      ansible.builtin.apt:
-        autoremove: true
+        autoremove: yes
       register: apt_autoremove
       changed_when: apt_autoremove.changed
 
-    - name: Display update results
+    - name: Display update summary
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}:
-          update={{ apt_update.cache_updated }},
-          upgrade={{ apt_upgrade.changed }},
-          dist-up={{ apt_dist_upgrade.changed }},
-          autoremove={{ apt_autoremove.changed }}
+          cache_updated={{ apt_update.cache_updated }},
+          packages_upgraded={{ apt_upgrade.changed }},
+          autoremoved={{ apt_autoremove.changed }}
