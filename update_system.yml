@@ -1,32 +1,51 @@
 ---
-- name: Update and upgrade system packages on all machines
+- name: Safe system update with kernel locking
   hosts: all
   become: true
+  vars:
+    # Set to 'true' to hold kernel after upgrade
+    # Set to 'false' to unhold (or use 'unhold' for explicit unhold)
+    kernel_lock_action: hold  # Options: hold, unhold, none
   tasks:
-    - name: Update package cache
+    - name: Update and full-upgrade
       ansible.builtin.apt:
         update_cache: yes
-        cache_valid_time: 3600
-      register: apt_update
-      changed_when: apt_update.cache_updated
-
-    - name: Full system upgrade (safe + handles dependency changes)
-      ansible.builtin.apt:
         upgrade: full
         autoclean: yes
       register: apt_upgrade
-      changed_when: apt_upgrade.changed
 
-    - name: Remove unused packages
+    - name: Autoremove unused packages
       ansible.builtin.apt:
         autoremove: yes
-      register: apt_autoremove
-      changed_when: apt_autoremove.changed
+      when: apt_upgrade.changed
 
-    - name: Display update summary
+    - name: Get current kernel version
+      ansible.builtin.shell: uname -r
+      register: current_kernel
+      changed_when: false
+
+    - name: Hold current kernel (prevent future changes)
+      ansible.builtin.shell: apt-mark hold {{ current_kernel.stdout }}
+      when: 
+        - apt_upgrade.changed
+        - kernel_lock_action == 'hold'
+      register: kernel_hold
+
+    - name: Unhold current kernel (allow future changes)
+      ansible.builtin.shell: apt-mark unhold {{ current_kernel.stdout }}
+      when: 
+        - kernel_lock_action == 'unhold'
+      register: kernel_unhold
+
+    - name: Reboot if kernel updated
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+      when: apt_upgrade.changed
+
+    - name: Display summary
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}:
-          cache_updated={{ apt_update.cache_updated }},
-          packages_upgraded={{ apt_upgrade.changed }},
-          autoremoved={{ apt_autoremove.changed }}
+          upgraded={{ apt_upgrade.changed }},
+          kernel={{ current_kernel.stdout }},
+          action={{ kernel_lock_action | default('none') }}
