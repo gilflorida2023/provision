@@ -1,0 +1,37 @@
+---
+- name: Create authorized_keys file on control host
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tasks:
+    - name: Ensure reports directory exists
+      file:
+        path: reports
+        state: directory
+        owner: "{{ ansible_user_id }}"
+        mode: '755'
+
+    - name: Remove existing authorized_keys file
+      file:
+        path: reports/authorized_keys
+        state: absent
+
+- name: Collect public keys from managed hosts
+  hosts: all
+  gather_facts: false
+  become: no  # Run as the ansible_user, not root
+  tasks:
+    - name: Slurp id_rsa.pub from managed host
+      slurp:
+        src: ~/.ssh/id_rsa.pub
+      register: pub_key_content
+
+    - name: Append public key to authorized_keys on control host
+      lineinfile:
+        path: reports/authorized_keys
+        line: "{{ pub_key_content.content | b64decode | trim }}"  # Decode and trim any trailing whitespace/newline
+        create: yes
+        owner: "{{ ansible_user_id }}"
+        mode: '600'
+      delegate_to: localhost
+      run_once: false
