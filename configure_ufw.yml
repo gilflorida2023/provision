@@ -3,22 +3,16 @@
   hosts: all
   become: yes
   tasks:
-    - name: Check current UFW status
-      ansible.builtin.command: ufw status
-      register: ufw_status
-      changed_when: false
-      check_mode: no
+    - name: Install UFW if not present
+      ansible.builtin.package:
+        name: ufw
+        state: present
 
-    - name: Debug ufw_status
-      ansible.builtin.debug:
-        var: ufw_status.stdout
+    - name: Reset UFW to delete all rules (safe when inactive)
+      ansible.builtin.command: ufw --force reset
+      changed_when: true
 
-    - name: Debug condition for enable
-      ansible.builtin.debug:
-        msg: "Condition result: {{ 'Status: inactive' in ufw_status.stdout }}"
-      when: ufw_status.stdout is defined
-
-    - name: Set UFW default policy to deny incoming
+    - name: Set default incoming policy to deny
       ansible.builtin.ufw:
         direction: incoming
         policy: deny
@@ -26,29 +20,31 @@
     - name: Allow SSH (port 22) from each inventory host
       ansible.builtin.ufw:
         rule: allow
-        from_ip: "{{ hostvars[item]['ansible_host'] }}"
+        from_ip: "{{ hostvars[item].ansible_host }}"
         port: 22
         proto: tcp
       loop: "{{ groups['all'] }}"
-      when: hostvars[item]['ansible_host'] is defined
+      when: hostvars[item].ansible_host is defined
 
     - name: Allow port 11434 from each inventory host
       ansible.builtin.ufw:
         rule: allow
-        from_ip: "{{ hostvars[item]['ansible_host'] }}"
+        from_ip: "{{ hostvars[item].ansible_host }}"
         port: 11434
         proto: tcp
       loop: "{{ groups['all'] }}"
-      when: hostvars[item]['ansible_host'] is defined
+      when: hostvars[item].ansible_host is defined
 
     - name: Enable UFW
       ansible.builtin.ufw:
         state: enabled
-      when:
-        - ufw_status.stdout is defined
-        - "'Status: inactive' in ufw_status.stdout"
       register: ufw_enable
 
-    - name: Debug ufw_enable
+    - name: Debug final status
+      ansible.builtin.command: ufw status verbose
+      register: final_status
+      changed_when: false
+
+    - name: Show final UFW status
       ansible.builtin.debug:
-        var: ufw_enable
+        msg: "{{ final_status.stdout_lines }}"
