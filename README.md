@@ -88,7 +88,53 @@ ansible-playbook -i inventory.yml  push_authorized_keys.yml --limit machine1,mac
 
 - report_host.yml - gather info about specified host and write to local reports directory
 ```
-ansible-playbook -i inventory.yml  report_host.yml --limit machine1,machine2   --ask-become-pass -v
+ansible-playbook -i inventory.yml  report_host.yml --limit machine1 --ask-become-pass -v
+```
+- sample report from report_host.yml
+```
+$ cat reports/machine1_report.txt 
+========================================
+HOST: machine1
+========================================
+System:
+  Kernel: 6.1.0-41-amd64 arch: x86_64 bits: 64
+  Distro: LMDE 6 faye
+
+Machine:
+  Model: 11JN002AUS
+  Serial: ZZZZZZZZ
+  BIOS: M47KT28A (02/05/2023)
+
+CPU:
+  Model: AMD Ryzen 7 PRO 5750GE with Radeon Graphics
+  Cores: 16 (SMT: enabled)
+  Speed:   2730
+ MHz (avg)
+
+Memory:
+  Total: 62.18 GiB
+  Used: 33.51 GiB (53.9%)
+
+Network:
+        IF: enp2s0f1 state: down mac: FF:FF:FF:FF:FF:FF
+            IF: wlp3s0 state: up mac: FF:FF:FF:FF:FF:FF
+    IP: 192.168.0.5          IF: xxxxxxxxxxxxxxx state: down mac: FF:FF:FF:FF:FF:FF
+      
+Drives:
+    /dev/mapper/lvmlmde-root (ext4) size: 1345.8 GiB
+    Mount: / used: 464.82 GiB (34.5%)
+    /dev/nvme0n1p1 (vfat) size: 0.28 GiB
+    Mount: /boot/efi used: 0.01 GiB (2.0%)
+  
+Swap:
+  Total: 62.18 GiB
+  Used: 0.0 GiB
+
+Uptime:         200d 11h  1m  5s
+Processes: 372
+
+Control Host: No
+
 ```
 
 - setup_pass.yml - not sure yet
