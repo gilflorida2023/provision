@@ -1,0 +1,117 @@
+# File: 01-bootstrap-moosefs.yml
+---
+- name: "MooseFS – Fully Automatic Fleet Bootstrap"
+  hosts: all
+  become: true
+  vars:
+    # MAGIC: find the ONE host that declares itself the brain
+    moose_master: >-
+      {{ groups['all'] | map('extract', hostvars) 
+         | selectattr('is_control_host', 'defined') 
+         | selectattr('is_control_host') 
+         | map(attribute='inventory_hostname') 
+         | first }}
+
+    # Fail beautifully if nobody volunteered
+    _assert_master: >-
+      {{ (moose_master is defined) or fail("ERROR: No host has is_control_host: true") }}
+
+    shared_dirs:
+      - { path: /mnt/moosefs/ssh,     goal: 3 }
+      - { path: /mnt/moosefs/cache,   goal: 3 }
+      - { path: /mnt/moosefs/iso,     goal: 2 }
+      - { path: /mnt/moosefs/ansible, goal: 2 }
+
+  pre_tasks:
+    - name: "MooseFS brain is {{ moose_master }} ({{ hostvars[moose_master].ansible_host }})"
+      debug:
+        msg: "Cluster master elected automatically"
+
+  tasks:
+    - name: Install MooseFS everywhere
+      apt:
+        name: [moosefs-master, moosefs-chunkserver, moosefs-client, moosefs-cli]
+        state: present
+        update_cache: yes
+
+    - name: Start master on the elected brain
+      command: mfsmaster -a
+      when: inventory_hostname == moose_master
+
+    - name: Start chunkserver on muscle nodes
+      command: mfschunkserver -a
+      when: inventory_hostname != moose_master
+
+    - name: Create mount point
+      file:
+        path: /mnt/moosefs
+        state: directory
+        mode: 0755
+
+    - name: Mount the shared universe
+      mount:
+        path: /mnt/moosefs
+        src: "{{ hostvars[moose_master].ansible_host }}"
+        fstype: mfs
+        opts: mfsdelayconnect,_netdev
+        state: mounted
+
+    - name: Persist mount in fstab
+      lineinfile:
+        path: /etc/fstab
+        line: "{{ hostvars[moose_master].ansible_host }} /mnt/moosefs mfs defaults,mfsdelayconnect,_netdev 0 0"
+        create: yes
+
+    - name: Create shared folders
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        mode: 0755
+      loop: "{{ shared_dirs }}"
+
+    - name: Set replication goals
+      command: mfssetgoal -r {{ item.goal }} {{ item.path }}
+      loop: "{{ shared_dirs }}"
+      ignore_errors: yes
+
+    - name: Global SSH keys (survives 2 dead nodes)
+      copy:
+        content: |
+          # ←←←  ADD YOUR KEYS BELOW  ←←←
+          ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... you@laptop
+          ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... eve@mac
+        dest: /mnt/moosefs/ssh/authorized_keys
+        mode: 0644
+
+    - name: Bind-mount to every user
+      mount:
+        path: "/home/{{ item }}/.ssh/authorized_keys"
+        src: /mnt/moosefs/ssh/authorized_keys
+        fstype: none
+        opts: bind,ro
+        state: mounted
+      loop: [ryzen, fast, speedy, root]
+
+    - name: Cache Ollama once
+      get_url:
+        url: https://ollama.ai/download/ollama-linux-amd64
+        dest: /mnt/moosefs/cache/ollama
+        mode: 0755
+      run_once: true
+
+    - name: Daily health email
+      cron:
+        name: "MooseFS health"
+        minute: "30"
+        hour: "4"
+        job: >-
+          mfsgetgoal -r /mnt/moosefs |
+          mail -s "MooseFS {{ inventory_hostname }} OK" you@gmail.com
+
+    - name: "DONE – your 3-node empire is immortal"
+      debug:
+        msg: |
+          MooseFS READY
+          • Brain: {{ moose_master }}
+          • Try: ssh ryzen@192.168.0.10
+          • Next: ansible-playbook 02-apps.yml

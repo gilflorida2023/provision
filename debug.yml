@@ -1,6 +1,0 @@
----
-- name: Debug inventory
-  hosts: all
-  tasks:
-    - debug:
-        msg: "Host {{ inventory_hostname }} - is_control_host: {{ is_control_host | default('NOT SET') }}"
