@@ -53,23 +53,8 @@
           - vlc
           - xclip
           - rustc
-          - ufw
         state: present
         update_cache: yes
-
-    # Configure UFW
-    - name: Configure UFW firewall
-      block:
-        - name: Enable UFW
-          ansible.builtin.ufw:
-            state: enabled
-            policy: deny
-
-        - name: Allow SSH
-          ansible.builtin.ufw:
-            rule: allow
-            name: OpenSSH
-      when: ansible_facts.os_family == "Debian"
 
     - name: Display completion message
       ansible.builtin.debug:
