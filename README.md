@@ -1,5 +1,5 @@
 ## Ansible for eventual system consistency :)
-- basic_packages.yml - install basic packages : pass git htop terminator vim gawk jq vlc xclip rustc ufw
+- basic_packages.yml - install basic packages : pass git htop terminator vim gawk jq vlc xclip rustc
 ```
 ansible-playbook -i inventory.yml  basic_packages.yml --limit machine1   --ask-become-pass -v
 ```

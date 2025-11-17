@@ -28,18 +28,27 @@
             state: present
             filename: brave-browser
 
+        - name: Update apt cache after adding Brave repo
+          ansible.builtin.apt:
+            update_cache: yes
+            cache_valid_time: 3600
+
         - name: Install Brave browser
           ansible.builtin.apt:
             name: brave-browser
             state: present
-            update_cache: yes
       when: brave_check.rc != 0
 
     - name: Display Brave status
       ansible.builtin.debug:
         msg: "{{ 'Brave browser installed' if brave_check.rc == 0 else 'Brave browser was just installed' }}"
 
-    # Install other essential packages
+    # Install other essential packages with better error handling
+    - name: Update apt cache before installing packages
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
     - name: Install essential packages
       ansible.builtin.apt:
         name:
@@ -54,7 +63,10 @@
           - xclip
           - rustc
         state: present
-        update_cache: yes
+        # Add timeout to prevent indefinite hanging
+        install_recommends: no
+      async: 1800  # 30 minutes timeout
+      poll: 10     # Check every 10 seconds
 
     - name: Display completion message
       ansible.builtin.debug:
