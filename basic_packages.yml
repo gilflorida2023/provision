@@ -62,6 +62,7 @@
           - vlc
           - xclip
           - rustc
+          - screen
         state: present
         # Add timeout to prevent indefinite hanging
         install_recommends: no
