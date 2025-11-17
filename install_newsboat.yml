@@ -184,6 +184,31 @@
         PATH: "{{ cargo_path }}:{{ ansible_env.PATH }}"
       when: git_clone.changed or current_version != target_version
 
+    # === CONFIG & URLS INSTALLATION (for the connecting user) ===
+    - name: Ensure ~/.newsboat directory exists
+      file:
+        path: "~/.newsboat"
+        state: directory
+        mode: '0755'
+      become: no
+
+    - name: Install Newsboat config from template
+      template:
+        src: templates/config.j2
+        dest: ~/.newsboat/config
+        mode: '0644'
+        backup: yes
+      become: no
+
+    - name: Install Newsboat URLs from template
+      template:
+        src: templates/urls.j2
+        dest: ~/.newsboat/urls
+        mode: '0644'
+        backup: yes
+      become: no
+
+    # === FINAL VERIFICATION ===
     - name: Verify installation
       command: newsboat --version
       register: installation_result
