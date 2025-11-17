@@ -136,7 +136,7 @@
 
     - name: Set service needs start flag
       set_fact:
-        service_needs_start: "{{ ollama_service_exists.stat.exists and current_service_status is defined and current_service_status.status.ActiveState != 'active' }}"
+        service_needs_start: "{{ ollama_service_exists.stat.exists and current_service_status is defined and current_service_status.status is defined and current_service_status.status.ActiveState != 'active' }}"
 
     - name: Set service needs creation flag
       set_fact:
@@ -284,12 +284,20 @@
         path: "{{ managed_node_download_path }}"
         state: absent
 
+    - name: Get final service status
+      systemd:
+        name: ollama
+        state: started
+      register: final_service_status
+      changed_when: false
+      ignore_errors: yes
+
     - name: Show final status
       debug:
         msg: |
           Ollama binary: {{ 'present' if ollama_binary.stat.exists else 'absent' }}
           Ollama version: {{ current_version_clean | default('unknown') }}
-          Service status: {{ 'running' if current_service_status is defined and current_service_status.status.ActiveState == 'active' else 'not running' }}
+          Service status: {{ 'running' if final_service_status is defined and final_service_status.status is defined and final_service_status.status.ActiveState == 'active' else 'not running' }}
           Actions taken: {{ 'installed and configured' if install_required else 'verified and started' }}
 
   handlers:
