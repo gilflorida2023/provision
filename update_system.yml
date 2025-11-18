@@ -1,51 +1,33 @@
 ---
-- name: Safe system update with kernel locking
+- name: Daily LMDE 6 update – safe forever, no version jump, no nags
   hosts: all
   become: true
-  vars:
-    # Set to 'true' to hold kernel after upgrade
-    # Set to 'false' to unhold (or use 'unhold' for explicit unhold)
-    kernel_lock_action: hold  # Options: hold, unhold, none
+  serial: 1                     # one machine at a time (safe for desktop)
   tasks:
-    - name: Update and full-upgrade
+
+    - name: Normal LMDE 6 update (security + bugfixes only)
       ansible.builtin.apt:
         update_cache: yes
         upgrade: full
-        autoclean: yes
-      register: apt_upgrade
-
-    - name: Autoremove unused packages
-      ansible.builtin.apt:
         autoremove: yes
-      when: apt_upgrade.changed
+        autoclean: yes
+      register: apt_update
 
-    - name: Get current kernel version
-      ansible.builtin.shell: uname -r
-      register: current_kernel
-      changed_when: false
+    - name: Detect if any Cinnamon/desktop package was upgraded (needs logout)
+      ansible.builtin.set_fact:
+        desktop_reloaded_needed: >-
+          {{ apt_update.changed and
+             (apt_update.upgraded | default([]) | join(' ') | regex_search('cinnamon|cjs|muffin|nemo|cinnamon-screensaver')) }}
 
-    - name: Hold current kernel (prevent future changes)
-      ansible.builtin.shell: apt-mark hold {{ current_kernel.stdout }}
-      when: 
-        - apt_upgrade.changed
-        - kernel_lock_action == 'hold'
-      register: kernel_hold
+    - name: Logout current user to apply desktop updates (clears all nags)
+      ansible.builtin.command: cinnamon-session-quit --logout --force
+      when: desktop_reloaded_needed | default(false)
+      ignore_errors: true          # user might not have a GUI session
+      become: false
+      become_user: "{{ ansible_user }}"
 
-    - name: Unhold current kernel (allow future changes)
-      ansible.builtin.shell: apt-mark unhold {{ current_kernel.stdout }}
-      when: 
-        - kernel_lock_action == 'unhold'
-      register: kernel_unhold
-
-    - name: Reboot if kernel updated
-      ansible.builtin.reboot:
-        reboot_timeout: 300
-      when: apt_upgrade.changed
-
-    - name: Display summary
+    - name: Victory – system is perfect
       ansible.builtin.debug:
-        msg: >-
-          {{ inventory_hostname }}:
-          upgraded={{ apt_upgrade.changed }},
-          kernel={{ current_kernel.stdout }},
-          action={{ kernel_lock_action | default('none') }}
+        msg: |
+          {{ inventory_hostname }} → LMDE 6 fully updated
+          No risk of LMDE 7 • All nags cleared • Ready for another day

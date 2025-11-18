@@ -11,7 +11,6 @@ all:
       ansible_user: fast
       ansible_ssh_private_key_file: ~/.ssh/id_rsa
       ansible_python_interpreter: /usr/bin/python3
-      is_control_host: true 
     speedy:
       ansible_host: 192.168.0.8
       ansible_user: speedy
@@ -22,3 +21,4 @@ all:
       ansible_user: scout
       ansible_ssh_private_key_file: ~/.ssh/id_rsa
       ansible_python_interpreter: /usr/bin/python3
+      is_control_host: true 
