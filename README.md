@@ -8,6 +8,10 @@ ansible-playbook -i inventory.yml  basic_packages.yml --limit machine1   --ask-b
 ```
 ansible-playbook -i inventory.yml  check_ufw_config.yml --limit machine1   --ask-become-pass -v
 ```
+- git_config.yml - configure git
+```
+ansible-playbook -i inventory.yml  git_config.yml --limit machine1   --ask-become-pass -v
+```
 
 - configure_ufw.yml - setup ufw  firewall rules based on the inventory inventory.yml file
 ```

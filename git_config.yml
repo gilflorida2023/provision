@@ -1,0 +1,55 @@
+---
+- name: Install and configure Git for gilflorida2023
+  hosts: all
+  become: yes                     # needed for package installation
+  tasks:
+
+    - name: Install Git (Ubuntu/Debian)
+      apt:
+        name: git
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install Git (RedHat/CentOS/Fedora/Rocky)
+      yum:
+        name: git
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install Git (Arch Linux)
+      pacman:
+        name: git
+        state: present
+      when: ansible_os_family == "Archlinux"
+
+    # Runs as the normal user (not root) so it writes to ~./.gitconfig
+    - name: Set global Git user name
+      git_config:
+        name: user.name
+        scope: global
+        value: "gilflorida2023"
+      become: no
+
+    - name: Set global Git user email
+      git_config:
+        name: user.email
+        scope: global
+        value: "gilflorida2023@gmail.com"
+      become: no
+
+    # Optional but nice – use main as default branch name on new repos
+    - name: Set init.defaultBranch to main
+      git_config:
+        name: init.defaultBranch
+        scope: global
+        value: "main"
+      become: no
+
+    # Optional – cache HTTPS credentials for 1 week so you’re not prompted every time
+    - name: Enable Git credential helper (store for 1 week)
+      git_config:
+        name: credential.helper
+        scope: global
+        value: "cache --timeout=604800"
+      become: no
