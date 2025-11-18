@@ -24,6 +24,8 @@
           - rustc
           - screen
           - ansible-core
+          - lynx
+          - python3.11-venv
         state: present
         # Add timeout to prevent indefinite hanging
         install_recommends: no

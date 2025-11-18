@@ -35,6 +35,13 @@
       loop: "{{ groups['all'] }}"
       when: hostvars[item].ansible_host is defined
 
+    - name: Allow port 11434 from localhost (127.0.0.1)
+      ansible.builtin.ufw:
+        rule: allow
+        from_ip: 127.0.0.1
+        port: 11434
+        proto: tcp
+
     - name: Enable UFW
       ansible.builtin.ufw:
         state: enabled
