@@ -1,33 +1,15 @@
 ---
-- name: Daily LMDE 6 update – safe forever, no version jump, no nags
+- name: Simple LMDE 6 security updates
   hosts: all
   become: true
-  serial: 1                     # one machine at a time (safe for desktop)
+  
   tasks:
-
-    - name: Normal LMDE 6 update (security + bugfixes only)
-      ansible.builtin.apt:
+    - name: Update package list
+      apt:
         update_cache: yes
-        upgrade: full
+
+    - name: Upgrade security packages only
+      apt:
+        upgrade: safe
         autoremove: yes
         autoclean: yes
-      register: apt_update
-
-    - name: Detect if any Cinnamon/desktop package was upgraded (needs logout)
-      ansible.builtin.set_fact:
-        desktop_reloaded_needed: >-
-          {{ apt_update.changed and
-             (apt_update.upgraded | default([]) | join(' ') | regex_search('cinnamon|cjs|muffin|nemo|cinnamon-screensaver')) }}
-
-    - name: Logout current user to apply desktop updates (clears all nags)
-      ansible.builtin.command: cinnamon-session-quit --logout --force
-      when: desktop_reloaded_needed | default(false)
-      ignore_errors: true          # user might not have a GUI session
-      become: false
-      become_user: "{{ ansible_user }}"
-
-    - name: Victory – system is perfect
-      ansible.builtin.debug:
-        msg: |
-          {{ inventory_hostname }} → LMDE 6 fully updated
-          No risk of LMDE 7 • All nags cleared • Ready for another day
