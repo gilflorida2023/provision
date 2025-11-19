@@ -1,0 +1,45 @@
+---
+- name: Install Brave browser
+  hosts: all
+  become: yes
+  tasks:
+    # Brave Browser Installation
+    - name: Check if Brave browser is installed
+      ansible.builtin.command: which brave-browser
+      register: brave_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install Brave browser prerequisites
+      block:
+        - name: Install curl
+          ansible.builtin.apt:
+            name: curl
+            state: present
+
+        - name: Add Brave browser repository key
+          ansible.builtin.apt_key:
+            url: https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+            state: present
+
+        - name: Add Brave browser repository
+          ansible.builtin.apt_repository:
+            repo: "deb [arch=amd64] https://brave-browser-apt-release.s3.brave.com/ stable main"
+            state: present
+            filename: brave-browser
+
+        - name: Update apt cache after adding Brave repo
+          ansible.builtin.apt:
+            update_cache: yes
+            cache_valid_time: 3600
+
+        - name: Install Brave browser
+          ansible.builtin.apt:
+            name: brave-browser
+            state: present
+      when: brave_check.rc != 0
+
+    - name: Display Brave status
+      ansible.builtin.debug:
+        msg: "{{ 'Brave browser installed' if brave_check.rc == 0 else 'Brave browser was just installed' }}"
+
