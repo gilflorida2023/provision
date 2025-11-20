@@ -23,6 +23,8 @@
           - xclip
           - rustc
           - screen
+          - inxi
+          - lshw
           - ansible-core
           - lynx
           - python3.11-venv
