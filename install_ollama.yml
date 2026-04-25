@@ -45,18 +45,18 @@
         state: directory
         mode: '0755'
 
-    - name: Check if we already have the correct version downloaded
+    - name: Check if we already have the correct version downloaded and verified
       delegate_to: localhost
       run_once: true
       stat:
-        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst"
+        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst.verified"
       register: existing_download
 
     - name: DEBUG - Control node cache status
       delegate_to: localhost
       run_once: true
       debug:
-        msg: "CONTROL NODE CACHE: latest_version={{ latest_version_clean }}, cached_exists={{ existing_download.stat.exists }}"
+        msg: "CONTROL NODE CACHE: latest_version={{ latest_version_clean }}, cached_verified={{ existing_download.stat.exists }}"
 
     - name: Install aria2 on control node (if needed)
       delegate_to: localhost
@@ -230,12 +230,30 @@
           changed_when: false
           when: not hash_valid | bool
 
+        - name: Create cache integrity marker (after successful hash)
+          delegate_to: localhost
+          run_once: true
+          when: existing_download.stat.exists or (hash_valid | bool)
+          file:
+            path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst.verified"
+            state: touch
+            mode: '0644'
+
         - name: Final verification of re-downloaded file
           assert:
             that:
               - expected_sha256.stdout == actual_sha256_retry.stdout
             fail_msg: "SHA256 hash verification failed after re-download! Expected {{ expected_sha256.stdout }}"
           when: not hash_valid | bool
+
+        - name: Update cache integrity marker after retry success
+          delegate_to: localhost
+          run_once: true
+          when: not hash_valid | bool
+          file:
+            path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst.verified"
+            state: touch
+            mode: '0644'
 
     # PROPER CONTROL NODE IDENTIFICATION
     - name: Find control host from inventory
@@ -494,12 +512,12 @@
         - install_required or roc_install_required
         - "'ollama-linux-amd64-rocm' in item.name and 'tar.zst' in item.name"
 
-    - name: Check if ROCm already cached on control node
+    - name: Check if ROCm already cached and verified on control node
       delegate_to: localhost
       run_once: true
       when: install_required or roc_install_required
       stat:
-        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst"
+        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst.verified"
       register: roc_existing_download
 
     - name: Download ROCm package to control node (if needed)
@@ -549,7 +567,7 @@
     - name: Remove corrupted ROCm download if hash invalid
       delegate_to: localhost
       run_once: true
-      when: install_required or roc_install_required
+      when: (install_required or roc_install_required) and not roc_hash_valid | bool
       file:
         path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst"
         state: absent
@@ -587,6 +605,15 @@
       assert:
         that: roc_expected_sha256.stdout == roc_actual_sha256_retry.stdout
         fail_msg: "ROCm SHA256 hash verification failed after retry! Expected {{ roc_expected_sha256.stdout }}"
+
+    - name: Create ROCm cache integrity marker
+      delegate_to: localhost
+      run_once: true
+      when: install_required or roc_install_required
+      file:
+        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst.verified"
+        state: touch
+        mode: '0644'
 
     - name: Copy ROCm package to managed node
       when: install_required or roc_install_required
