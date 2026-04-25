@@ -52,6 +52,12 @@
         path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst"
       register: existing_download
 
+    - name: DEBUG - Control node cache status
+      delegate_to: localhost
+      run_once: true
+      debug:
+        msg: "CONTROL NODE CACHE: latest_version={{ latest_version_clean }}, cached_exists={{ existing_download.stat.exists }}"
+
     - name: Install aria2 on control node (if needed)
       delegate_to: localhost
       run_once: true
@@ -289,6 +295,10 @@
       set_fact:
         install_required: "{{ not ollama_binary.stat.exists or (current_version_clean | default('unknown') != latest_version_clean) }}"
 
+    - name: DEBUG - Version comparison on managed node
+      debug:
+        msg: "MANAGED NODE: current={{ current_version_clean | default('unknown') }}, latest={{ latest_version_clean }}, install_required={{ install_required }}"
+
     - name: Set service needs start flag
       set_fact:
         service_needs_start: "{{ ollama_service_exists.stat.exists and current_service_status is defined and current_service_status.status is defined and current_service_status.status.ActiveState != 'active' }}"
@@ -297,9 +307,13 @@
       set_fact:
         service_needs_creation: "{{ not ollama_service_exists.stat.exists }}"
 
-    - name: Set ROCm installation required flag (always use ROCm - falls back gracefully)
+    - name: Set ROCm installation required flag (only if update needed, GPU support)
       set_fact:
-        roc_install_required: true
+        roc_install_required: "{{ install_required }}"
+
+    - name: DEBUG - ROCm decision
+      debug:
+        msg: "ROCM: install_required={{ install_required }}, roc_install_required={{ roc_install_required }}"
 
     - name: Debug state information
       debug:
