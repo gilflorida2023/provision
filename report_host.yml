@@ -5,6 +5,17 @@
   become: yes
 
   tasks:
+    - name: Ensure inxi is installed
+      apt:
+        name: inxi
+        state: present
+      failed_when: false
+
+    - name: Generate system report using inxi
+      shell: inxi -Fxxrzc0
+      register: inxi_output
+      changed_when: false
+
     - name: Collect ALL facts
       setup:
         gather_subset: all
@@ -42,59 +53,6 @@
       register: proc_count
       changed_when: false
 
-    - name: Display Host Report (REAL NEWLINES, NO ESCAPES)
-      ansible.builtin.shell: |
-        printf '%s\n' \
-          '========================================' \
-          'HOST: {{ inventory_hostname }}' \
-          '========================================' \
-          'System:' \
-          '  Kernel: {{ ansible_kernel }} arch: {{ ansible_architecture }} bits: {{ ansible_userspace_bits }}' \
-          '  Distro: {{ ansible_distribution }} {{ ansible_distribution_version }} {{ ansible_distribution_release }}' \
-          '' \
-          'Machine:' \
-          '  Model: {{ ansible_product_name | default("N/A") }}' \
-          '  Serial: {{ ansible_product_serial | default("<hidden>") }}' \
-          '  BIOS: {{ ansible_bios_version | default("N/A") }} ({{ ansible_bios_date | default("N/A") }})' \
-          '' \
-          'CPU:' \
-          '  Model: {{ ansible_processor[2] | default("Unknown") }}' \
-          '  Cores: {{ ansible_processor_vcpus }} (SMT: {{ "enabled" if ansible_processor_threads_per_core > 1 else "disabled" }})' \
-          '  Speed: {{ avg_cpu_speed }} MHz (avg)' \
-          '' \
-          'Memory:' \
-          '  Total: {{ (ansible_memtotal_mb / 1024) | round(2) }} GiB' \
-          '  Used: {{ (ansible_memory_mb.real.used / 1024) | round(2) }} GiB ({{ ((ansible_memory_mb.real.used / ansible_memtotal_mb) * 100) | round(1) }}%)' \
-          '' \
-          'Network:' \
-          {% for iface in ansible_interfaces | reject('equalto', 'lo') %}
-          {% set data = ansible_facts[iface] | default({}) %}
-          {% if data.device is defined %}
-          '  IF: {{ iface }} state: {{ "up" if data.active | default(false) else "down" }} mac: {{ data.macaddress | default("<filtered>") }}' \
-          {% if data.ipv4 is defined %}
-          '    IP: {{ data.ipv4.address }}' \
-          {% endif %}
-          {% endif %}
-          {% endfor %} \
-          '' \
-          'Drives:' \
-          {% for mount in ansible_mounts %}
-          '  {{ mount.device }} ({{ mount.fstype }}) size: {{ (mount.size_total / 1024 / 1024 / 1024) | round(2) }} GiB' \
-          '    Mount: {{ mount.mount }} used: {{ ((mount.size_total - mount.size_available) / 1024 / 1024 / 1024) | round(2) }} GiB ({{ (((mount.size_total - mount.size_available) / mount.size_total) * 100) | round(1) }}%)' \
-          {% endfor %} \
-          '' \
-          'Swap:' \
-          '  Total: {{ (ansible_swaptotal_mb / 1024) | round(2) }} GiB' \
-          '  Used: {{ ((ansible_swaptotal_mb - ansible_swapfree_mb) / 1024) | round(2) }} GiB' \
-          '' \
-          'Uptime: {{ uptime_formatted }}' \
-          'Processes: {{ proc_count.stdout | int }}' \
-          '' \
-          'Control Host: {{ "Yes" if hostvars[inventory_hostname].is_control_host | default(false) else "No" }}'
-      args:
-        executable: /bin/bash
-      changed_when: false
-
     - name: Ensure reports directory exists
       file:
         path: reports
@@ -104,50 +62,6 @@
 
     - name: Save report to file
       copy:
-        content: |
-          ========================================
-          HOST: {{ inventory_hostname }}
-          ========================================
-          System:
-            Kernel: {{ ansible_kernel }} arch: {{ ansible_architecture }} bits: {{ ansible_userspace_bits }}
-            Distro: {{ ansible_distribution }} {{ ansible_distribution_version }} {{ ansible_distribution_release }}
-
-          Machine:
-            Model: {{ ansible_product_name | default('N/A') }}
-            Serial: {{ ansible_product_serial | default('<hidden>') }}
-            BIOS: {{ ansible_bios_version | default('N/A') }} ({{ ansible_bios_date | default('N/A') }})
-
-          CPU:
-            Model: {{ ansible_processor[2] | default('Unknown') }}
-            Cores: {{ ansible_processor_vcpus }} (SMT: {{ 'enabled' if ansible_processor_threads_per_core > 1 else 'disabled' }})
-            Speed: {{ avg_cpu_speed }} MHz (avg)
-
-          Memory:
-            Total: {{ (ansible_memtotal_mb / 1024) | round(2) }} GiB
-            Used: {{ (ansible_memory_mb.real.used / 1024) | round(2) }} GiB ({{ ((ansible_memory_mb.real.used / ansible_memtotal_mb) * 100) | round(1) }}%)
-
-          Network:
-            {% for iface in ansible_interfaces | reject('equalto', 'lo') %}
-            {% set data = ansible_facts[iface] | default({}) %}
-            {% if data.device is defined %}
-            IF: {{ iface }} state: {{ 'up' if data.active | default(false) else 'down' }} mac: {{ data.macaddress | default('<filtered>') }}
-            {% if data.ipv4 is defined %}  IP: {{ data.ipv4.address }}{% endif %}
-            {% endif %}
-            {% endfor %}
-
-          Drives:
-            {% for mount in ansible_mounts %}
-            {{ mount.device }} ({{ mount.fstype }}) size: {{ (mount.size_total / 1024 / 1024 / 1024) | round(2) }} GiB
-              Mount: {{ mount.mount }} used: {{ ((mount.size_total - mount.size_available) / 1024 / 1024 / 1024) | round(2) }} GiB ({{ (((mount.size_total - mount.size_available) / mount.size_total) * 100) | round(1) }}%)
-            {% endfor %}
-
-          Swap:
-            Total: {{ (ansible_swaptotal_mb / 1024) | round(2) }} GiB
-            Used: {{ ((ansible_swaptotal_mb - ansible_swapfree_mb) / 1024) | round(2) }} GiB
-
-          Uptime: {{ uptime_formatted }}
-          Processes: {{ proc_count.stdout | int }}
-
-          Control Host: {{ 'Yes' if hostvars[inventory_hostname].is_control_host | default(false) else 'No' }}
+        content: "{{ inxi_output.stdout }}"
         dest: "reports/{{ inventory_hostname }}_report.txt"
       delegate_to: localhost

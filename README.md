@@ -1,156 +1,71 @@
-## Ansible for eventual system consistency :)
-- basic_packages.yml - install basic packages : pass git htop terminator vim gawk jq vlc xclip rustc
-```
-ansible-playbook -i inventory.yml  basic_packages.yml --limit machine1   --ask-become-pass -v
+# Ansible Provisioning
+
+Infrastructure automation for managing multiple Linux hosts.
+
+## Inventory
+
+- `inventory.yml` - Hosts: scout (control), ryzen, speedy, fast
+
+## Playbooks
+
+### Installation Playbooks
+
+| Playbook | Description | Command |
+|----------|-------------|---------|
+| `install_ollama.yml` | Install/update Ollama LLM runtime with AMD ROCm GPU support. Downloads to control node, then deploys to managed nodes. | `ansible-playbook -i inventory.yml install_ollama.yml --ask-become-pass` |
+| `basic_packages.yml` | Install git, htop, terminator, vim, gawk, jq, vlc, xclip, rustc | `ansible-playbook -i inventory.yml basic_packages.yml --ask-become-pass` |
+| `install_brave.yml` | Install Brave browser | `ansible-playbook -i inventory.yml install_brave.yml --ask-become-pass` |
+| `install_docker.yml` | Install Docker and Docker Compose | `ansible-playbook -i inventory.yml install_docker.yml --ask-become-pass` |
+| `install_newsboat.yml` | Install Newsboat RSS reader | `ansible-playbook -i inventory.yml install_newsboat.yml --ask-become-pass` |
+| `install_vagrant.yml` | Install Vagrant | `ansible-playbook -i inventory.yml install_vagrant.yml --ask-become-pass` |
+| `install_virtualbox.yml` | Install VirtualBox | `ansible-playbook -i inventory.yml install_virtualbox.yml --ask-become-pass` |
+| `install_vscode.yml` | Install Visual Studio Code | `ansible-playbook -i inventory.yml install_vscode.yml --ask-become-pass` |
+| `install_yt-dlp.yml` | Install yt-dlp video downloader | `ansible-playbook -i inventory.yml install_yt-dlp.yml --ask-become-pass` |
+| `install_moosefs.yml` | Install MooseFS distributed filesystem (deprecated) | `ansible-playbook -i inventory.yml install_moosefs.yml --ask-become-pass` |
+
+### Configuration Playbooks
+
+| Playbook | Description | Command |
+|----------|-------------|---------|
+| `configure_ufw.yml` | Configure UFW firewall rules based on inventory | `ansible-playbook -i inventory.yml configure_ufw.yml --ask-become-pass` |
+| `git_config.yml` | Configure git settings | `ansible-playbook -i inventory.yml git_config.yml --ask-become-pass` |
+| `setup_pass.yml` | Setup pass password manager | `ansible-playbook -i inventory.yml setup_pass.yml --ask-become-pass` |
+
+### Utility Playbooks
+
+| Playbook | Description | Command |
+|----------|-------------|---------|
+| `check_ufw_config.yml` | Display UFW firewall configuration | `ansible-playbook -i inventory.yml check_ufw_config.yml --ask-become-pass` |
+| `report_host.yml` | Generate inxi system report and write to reports/ directory | `ansible-playbook -i inventory.yml report_host.yml --ask-become-pass` |
+| `update_system.yml` | Update system packages | `ansible-playbook -i inventory.yml update_system.yml --ask-become-pass` |
+| `update_ollama_llms.yml` | Update LLM models within Ollama | `ansible-playbook -i inventory.yml update_ollama_llms.yml --ask-become-pass` |
+
+### Key Management Playbooks
+
+| Playbook | Description | Command |
+|----------|-------------|---------|
+| `create_authorized_keys.yml` | Create authorized_keys file in reports/ directory | `ansible-playbook -i inventory.yml create_authorized_keys.yml --ask-become-pass` |
+| `push_authorized_keys.yml` | Push authorized_keys to managed nodes | `ansible-playbook -i inventory.yml push_authorized_keys.yml --ask-become-pass` |
+
+### Project Setup
+
+| Playbook | Description | Command |
+|----------|-------------|---------|
+| `setup_projects.yaml` | Setup project directories | `ansible-playbook -i inventory.yml setup_projects.yaml --ask-become-pass` |
+
+## Usage
+
+Run a playbook on all hosts:
+```bash
+ansible-playbook -i inventory.yml <playbook>.yml --ask-become-pass
 ```
 
-- check_ufw_config.yml - display ufw config on the specified hosts.
-```
-ansible-playbook -i inventory.yml  check_ufw_config.yml --limit machine1   --ask-become-pass -v
-```
-- git_config.yml - configure git
-```
-ansible-playbook -i inventory.yml  git_config.yml --limit machine1   --ask-become-pass -v
+Run on specific host(s):
+```bash
+ansible-playbook -i inventory.yml <playbook>.yml --limit hostname --ask-become-pass
 ```
 
-- configure_ufw.yml - setup ufw  firewall rules based on the inventory inventory.yml file
-```
-ansible-playbook -i inventory.yml  configure_ufw.yml --limit machine1   --ask-become-pass -v
-ansible-playbook -i inventory.yml  configure_ufw.yml   --ask-become-pass -v
-```
-
-- install_docker.yml - install docker
-```
-ansible-playbook -i inventory.yml  install_docker.yml --limit machine1   --ask-become-pass -v
-```
-
-- install_moosefs.yml - Deprecated - install moosefs on each managed node 
-```
-ansible-playbook -i inventory.yml  install_moosefs.yml --limit machine1   --ask-become-pass -v
-```
-
-- install_newsboat.yml - installs newsboat. need to add  the config and urls file and integrte into this playbook.
-```
-ansible-playbook -i inventory.yml  install_newsboat.yml --limit machine1   --ask-become-pass -v
-```
-
-- install_ollama.yml - install latest and greatest ollama to specified hosts.
-```
-ansible-playbook -i inventory.yml  install_ollama.yml --limit machine1   --ask-become-pass -v
-```
-
-- install_vagrant.yml - install vagrant to specified hosts
-```
-ansible-playbook -i inventory.yml  install_vagrant.yml --limit machine1   --ask-become-pass -v
-```
-
-- install_virtualbox.yml - install virtualbox to specified hosts
-```
-ansible-playbook -i inventory.yml  install_virtualbox.yml --limit machine1   --ask-become-pass -v
-```
-
-- install_vscode.yml - install vscode
-```
-ansible-playbook -i inventory.yml  install_vscode.yml --limit machine1   --ask-become-pass -v
-```
-
-- install_yt-dlp.yml
-```
-ansible-playbook -i inventory.yml  install_yt-dlp.yml --limit machine1   --ask-become-pass -v
-```
-
-- inventory.yml - sample inventory file
-```
----
-all:
-  hosts:
-    machine1:
-      ansible_host: 192.168.0.10
-      ansible_user: machine1
-      ansible_ssh_private_key_file: ~/.ssh/id_rsa
-      ansible_python_interpreter: /usr/bin/python3
-    machine2:
-      ansible_host: 192.168.0.5
-      ansible_user: machine2
-      ansible_ssh_private_key_file: ~/.ssh/id_rsa
-      ansible_python_interpreter: /usr/bin/python3
-      is_control_host: true 
-    machine3:
-      ansible_host: 192.168.0.8
-      ansible_user: machine3
-      ansible_ssh_private_key_file: ~/.ssh/id_rsa
-      ansible_python_interpreter: /usr/bin/python3
-```
-
-- create_authorized_keys.yml - Create an authorized_key file in the reports directory. - Not Idempotent
-- push_authorized_keys.yml - call create and then push 
-```
-# do not limit create_authorized_keys.yml
-ansible-playbook -i inventory.yml  create_authorized_keys.yml    --ask-become-pass -v
-ansible-playbook -i inventory.yml  push_authorized_keys.yml --limit machine1,machine2   --ask-become-pass -v
-```
-
-- report_host.yml - gather info about specified host and write to local reports directory
-```
-ansible-playbook -i inventory.yml  report_host.yml --limit machine1 --ask-become-pass -v
-```
-- sample report from report_host.yml
-```
-$ cat reports/machine1_report.txt 
-========================================
-HOST: machine1
-========================================
-System:
-  Kernel: 6.1.0-41-amd64 arch: x86_64 bits: 64
-  Distro: LMDE 6 faye
-
-Machine:
-  Model: 11JN002AUS
-  Serial: ZZZZZZZZ
-  BIOS: M47KT28A (02/05/2023)
-
-CPU:
-  Model: AMD Ryzen 7 PRO 5750GE with Radeon Graphics
-  Cores: 16 (SMT: enabled)
-  Speed:   2730
- MHz (avg)
-
-Memory:
-  Total: 62.18 GiB
-  Used: 33.51 GiB (53.9%)
-
-Network:
-        IF: enp2s0f1 state: down mac: FF:FF:FF:FF:FF:FF
-            IF: wlp3s0 state: up mac: FF:FF:FF:FF:FF:FF
-    IP: 192.168.0.5          IF: xxxxxxxxxxxxxxx state: down mac: FF:FF:FF:FF:FF:FF
-      
-Drives:
-    /dev/mapper/lvmlmde-root (ext4) size: 1345.8 GiB
-    Mount: / used: 464.82 GiB (34.5%)
-    /dev/nvme0n1p1 (vfat) size: 0.28 GiB
-    Mount: /boot/efi used: 0.01 GiB (2.0%)
-  
-Swap:
-  Total: 62.18 GiB
-  Used: 0.0 GiB
-
-Uptime:         200d 11h  1m  5s
-Processes: 372
-
-Control Host: No
-
-```
-
-- setup_pass.yml - not sure yet
-```
-```
-
-- update_ollama_llms.yml -update llms wthin ollama on specified host.
-```
-ansible-playbook -i inventory.yml  update_ollama_llms.yml --limit machine1,machine2   --ask-become-pass -v
-```
-
-- update_system.yml - update system
-```
-ansible-playbook -i inventory.yml  update_system.yml --limit machine1,machine2   --ask-become-pass -v
+Verbose output:
+```bash
+ansible-playbook -i inventory.yml <playbook>.yml --ask-become-pass -v
 ```
