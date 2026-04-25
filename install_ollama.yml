@@ -2,32 +2,38 @@
 - name: Install and configure Ollama
   hosts: all
   become: yes
+  serial: 1
   vars:
     ollama_version_url: "https://api.github.com/repos/ollama/ollama/releases/latest"
     install_path: "/usr/local/bin"
     service_path: "/etc/systemd/system/ollama.service"
     control_node_download_dir: "/opt/ansible_downloads/ollama"
     managed_node_download_dir: "/var/cache/ollama"
-    managed_node_download_path: "/var/cache/ollama/ollama-linux-amd64.tgz"
+    managed_node_download_path: "/var/cache/ollama/ollama-linux-amd64.tar.zst"
+    roc_managed_node_download_path: "/var/cache/ollama/ollama-linux-amd64-rocm.tar.zst"
+    roc_install_required: false
+    download_friendly_mode: false
+    download_speed_limit: "70K"
 
   tasks:
     # --- CONTROL NODE TASKS (run once) ---
     - name: Get latest Ollama version from GitHub
       delegate_to: localhost
       run_once: true
+      become: false
       uri:
         url: "{{ ollama_version_url }}"
         method: GET
       register: ollama_release
 
-    - name: Extract latest version and download URL
+    - name: Extract latest version and download URL for Ollama Linux AMD64
       run_once: true
       set_fact:
         latest_version: "{{ ollama_release.json.tag_name }}"
         latest_version_clean: "{{ ollama_release.json.tag_name | regex_replace('^v', '') }}"
         download_url: "{{ item.browser_download_url }}"
       loop: "{{ ollama_release.json.assets }}"
-      when: "'ollama-linux-amd64.tgz' in item.name"
+      when: "'ollama-linux-amd64.tar.zst' in item.name and 'roc' not in item.name"
       loop_control:
         label: "{{ item.name }}"
 
@@ -43,7 +49,7 @@
       delegate_to: localhost
       run_once: true
       stat:
-        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
+        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst"
       register: existing_download
 
     - name: Install aria2 on control node (if needed)
@@ -63,11 +69,10 @@
           command:
             cmd: >
               aria2c --continue=true --max-tries=3 --retry-wait=5 --split=4 --max-connection-per-server=4
+              {{ '--max-download-limit=' + download_speed_limit if download_friendly_mode | bool else '' }}
               -d "{{ control_node_download_dir }}"
-              -o "ollama-{{ latest_version }}-linux-amd64.tgz"
+              -o "ollama-{{ latest_version }}-linux-amd64.tar.zst"
               "{{ download_url }}"
-          args:
-            creates: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
           register: aria2c_download
           ignore_errors: yes
 
@@ -75,6 +80,156 @@
           fail:
             msg: "Failed to download Ollama package with aria2c after multiple attempts"
           when: aria2c_download is failed or aria2c_download.rc != 0
+
+        - name: Get sha256 hash for verification
+          uri:
+            url: "https://api.github.com/repos/ollama/ollama/releases/tags/{{ latest_version }}"
+            method: GET
+          register: ollama_release_full
+          changed_when: false
+
+        - name: Extract sha256sum.txt download URL
+          set_fact:
+            sha256sum_url: "{{ item.browser_download_url }}"
+          loop: "{{ ollama_release_full.json.assets }}"
+          when: "'sha256sum.txt' in item.name"
+
+        - name: Download sha256sum.txt
+          get_url:
+            url: "{{ sha256sum_url }}"
+            dest: "{{ control_node_download_dir }}/sha256sum.txt"
+            mode: '0644'
+
+        - name: Read sha256sum.txt and extract hash for linux-amd64
+          shell: |
+            grep "ollama-linux-amd64.tar.zst" "{{ control_node_download_dir }}/sha256sum.txt" | awk '{print $1}'
+          register: expected_sha256
+          changed_when: false
+
+        - name: Compute SHA256 of downloaded file
+          shell: |
+            sha256sum "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst" | awk '{print $1}'
+          register: actual_sha256
+          changed_when: false
+
+        - name: Check if hash is valid
+          set_fact:
+            hash_valid: "{{ expected_sha256.stdout == actual_sha256.stdout }}"
+
+        - name: Remove corrupted download if hash invalid
+          file:
+            path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst"
+            state: absent
+          when: not hash_valid | bool
+
+        - name: Retry download if hash invalid (up to 3 retries)
+          command:
+            cmd: >
+              aria2c --continue=false --max-tries=1 --split=4 --max-connection-per-server=4
+              {{ '--max-download-limit=' + download_speed_limit if download_friendly_mode | bool else '' }}
+              -d "{{ control_node_download_dir }}"
+              -o "ollama-{{ latest_version }}-linux-amd64.tar.zst"
+              "{{ download_url }}"
+          register: retry_download
+          until: retry_download is succeeded
+          retries: 3
+          delay: 5
+          when: not hash_valid | bool
+          ignore_errors: yes
+
+        - name: Verify download after retry
+          fail:
+            msg: "Failed to download valid Ollama package after 3 retries - hash verification failed"
+          when: not hash_valid | bool and retry_download is failed
+
+        - name: Re-verify hash after retry download
+          shell: |
+            sha256sum "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst" | awk '{print $1}'
+          register: actual_sha256_retry
+          changed_when: false
+          when: not hash_valid | bool
+
+        - name: Final hash verification
+          assert:
+            that:
+              - expected_sha256.stdout == actual_sha256_retry.stdout if not hash_valid | bool else expected_sha256.stdout == actual_sha256.stdout
+            fail_msg: "SHA256 hash verification failed after retry! Expected {{ expected_sha256.stdout }}"
+          when: not hash_valid | bool
+
+    - name: Verify existing download hash (if already exists)
+      delegate_to: localhost
+      run_once: true
+      when: existing_download.stat.exists
+      block:
+        - name: Get sha256sum.txt URL for hash verification
+          uri:
+            url: "https://api.github.com/repos/ollama/ollama/releases/tags/{{ latest_version }}"
+            method: GET
+          register: ollama_release_full
+          changed_when: false
+
+        - name: Extract sha256sum.txt download URL
+          set_fact:
+            sha256sum_url: "{{ item.browser_download_url }}"
+          loop: "{{ ollama_release_full.json.assets }}"
+          when: "'sha256sum.txt' in item.name"
+
+        - name: Download sha256sum.txt for verification
+          get_url:
+            url: "{{ sha256sum_url }}"
+            dest: "{{ control_node_download_dir }}/sha256sum.txt"
+            mode: '0644'
+
+        - name: Read sha256sum.txt and extract hash for linux-amd64
+          shell: |
+            grep "ollama-linux-amd64.tar.zst" "{{ control_node_download_dir }}/sha256sum.txt" | awk '{print $1}'
+          register: expected_sha256
+          changed_when: false
+
+        - name: Compute SHA256 of existing downloaded file
+          shell: |
+            sha256sum "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst" | awk '{print $1}'
+          register: actual_sha256
+          changed_when: false
+
+        - name: Check if hash is valid
+          set_fact:
+            hash_valid: "{{ expected_sha256.stdout == actual_sha256.stdout }}"
+
+        - name: Remove corrupted download if hash invalid
+          file:
+            path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst"
+            state: absent
+          when: not hash_valid | bool
+
+        - name: Re-download if existing hash invalid
+          command:
+            cmd: >
+              aria2c --continue=false --max-tries=1 --split=4 --max-connection-per-server=4
+              {{ '--max-download-limit=' + download_speed_limit if download_friendly_mode | bool else '' }}
+              -d "{{ control_node_download_dir }}"
+              -o "ollama-{{ latest_version }}-linux-amd64.tar.zst"
+              "{{ download_url }}"
+          register: retry_download
+          until: retry_download is succeeded
+          retries: 3
+          delay: 5
+          when: not hash_valid | bool
+          ignore_errors: yes
+
+        - name: Verify hash after re-download
+          shell: |
+            sha256sum "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst" | awk '{print $1}'
+          register: actual_sha256_retry
+          changed_when: false
+          when: not hash_valid | bool
+
+        - name: Final verification of re-downloaded file
+          assert:
+            that:
+              - expected_sha256.stdout == actual_sha256_retry.stdout
+            fail_msg: "SHA256 hash verification failed after re-download! Expected {{ expected_sha256.stdout }}"
+          when: not hash_valid | bool
 
     # PROPER CONTROL NODE IDENTIFICATION
     - name: Find control host from inventory
@@ -142,6 +297,10 @@
       set_fact:
         service_needs_creation: "{{ not ollama_service_exists.stat.exists }}"
 
+    - name: Set ROCm installation required flag (always use ROCm - falls back gracefully)
+      set_fact:
+        roc_install_required: true
+
     - name: Debug state information
       debug:
         msg: |
@@ -149,6 +308,7 @@
           Current version: {{ current_version_clean | default('unknown') }}
           Latest version: {{ latest_version_clean }}
           Install required: {{ install_required }}
+          ROCm install required: {{ roc_install_required }}
           Service exists: {{ ollama_service_exists.stat.exists }}
           Service needs start: {{ service_needs_start }}
           Service needs creation: {{ service_needs_creation }}
@@ -195,21 +355,21 @@
         - name: Copy Ollama package from control node to managed node (for remote nodes)
           when: not is_control_node
           copy:
-            src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
+            src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst"
             dest: "{{ managed_node_download_path }}"
             mode: '0644'
 
         - name: Copy package to cache directory on control node
           when: is_control_node
           copy:
-            src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tgz"
+            src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64.tar.zst"
             dest: "{{ managed_node_download_path }}"
             mode: '0644'
             remote_src: yes
 
         - name: Extract Ollama binary to correct location
           shell: |
-            tar -C /usr/local -xzf "{{ managed_node_download_path }}"
+            tar -C /usr/local --zstd -xf "{{ managed_node_download_path }}"
             chmod 755 "{{ install_path }}/ollama"
           args:
             executable: /bin/bash
@@ -299,6 +459,149 @@
           Ollama version: {{ current_version_clean | default('unknown') }}
           Service status: {{ 'running' if final_service_status is defined and final_service_status.status is defined and final_service_status.status.ActiveState == 'active' else 'not running' }}
           Actions taken: {{ 'installed and configured' if install_required else 'verified and started' }}
+
+    # --- ROCm AMD GPU SUPPORT ---
+    - name: Get ROCm asset info (control node)
+      delegate_to: localhost
+      run_once: true
+      when: install_required or roc_install_required
+      uri:
+        url: "https://api.github.com/repos/ollama/ollama/releases/tags/{{ latest_version }}"
+        method: GET
+      register: ollama_release_for_roc
+
+    - name: Extract ROCm download URL (control node)
+      delegate_to: localhost
+      run_once: true
+      set_fact:
+        roc_download_url: "{{ item.browser_download_url }}"
+      loop: "{{ ollama_release_for_roc.json.assets }}"
+      when:
+        - install_required or roc_install_required
+        - "'ollama-linux-amd64-rocm' in item.name and 'tar.zst' in item.name"
+
+    - name: Check if ROCm already cached on control node
+      delegate_to: localhost
+      run_once: true
+      when: install_required or roc_install_required
+      stat:
+        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst"
+      register: roc_existing_download
+
+    - name: Download ROCm package to control node (if needed)
+      delegate_to: localhost
+      run_once: true
+      when: (install_required or roc_install_required) and not roc_existing_download.stat.exists
+      command:
+        cmd: >
+          aria2c --continue=true --max-tries=3 --retry-wait=5 --split=4 --max-connection-per-server=4
+          {{ '--max-download-limit=' + download_speed_limit if download_friendly_mode | bool else '' }}
+          -d "{{ control_node_download_dir }}"
+          -o "ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst"
+          "{{ roc_download_url }}"
+      register: roc_download
+      ignore_errors: yes
+
+    - name: Verify ROCm download
+      fail:
+        msg: "Failed to download ROCm package"
+      when: (install_required or roc_install_required) and not roc_existing_download.stat.exists and roc_download is failed
+
+    - name: Get sha256 hash for ROCm verification
+      delegate_to: localhost
+      run_once: true
+      when: install_required or roc_install_required
+      shell: |
+        grep "ollama-linux-amd64-rocm" "{{ control_node_download_dir }}/sha256sum.txt" | awk '{print $1}'
+      register: roc_expected_sha256
+      changed_when: false
+
+    - name: Compute SHA256 of downloaded ROCm file
+      delegate_to: localhost
+      run_once: true
+      when: install_required or roc_install_required
+      shell: |
+        sha256sum "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst" | awk '{print $1}'
+      register: roc_actual_sha256
+      changed_when: false
+
+    - name: Check if ROCm hash is valid
+      delegate_to: localhost
+      run_once: true
+      when: install_required or roc_install_required
+      set_fact:
+        roc_hash_valid: "{{ roc_expected_sha256.stdout == roc_actual_sha256.stdout }}"
+
+    - name: Remove corrupted ROCm download if hash invalid
+      delegate_to: localhost
+      run_once: true
+      when: install_required or roc_install_required
+      file:
+        path: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst"
+        state: absent
+
+    - name: Re-download ROCm if hash invalid
+      delegate_to: localhost
+      run_once: true
+      when: (install_required or roc_install_required) and not roc_hash_valid | bool
+      command:
+        cmd: >
+          aria2c --continue=false --max-tries=1 --split=4 --max-connection-per-server=4
+          {{ '--max-download-limit=' + download_speed_limit if download_friendly_mode | bool else '' }}
+          -d "{{ control_node_download_dir }}"
+          -o "ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst"
+          "{{ roc_download_url }}"
+      register: roc_retry_download
+      until: roc_retry_download is succeeded
+      retries: 3
+      delay: 5
+      ignore_errors: yes
+
+    - name: Verify ROCm hash after retry
+      delegate_to: localhost
+      run_once: true
+      when: (install_required or roc_install_required) and not roc_hash_valid | bool
+      shell: |
+        sha256sum "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst" | awk '{print $1}'
+      register: roc_actual_sha256_retry
+      changed_when: false
+
+    - name: Final ROCm hash verification
+      delegate_to: localhost
+      run_once: true
+      when: (install_required or roc_install_required) and not roc_hash_valid | bool
+      assert:
+        that: roc_expected_sha256.stdout == roc_actual_sha256_retry.stdout
+        fail_msg: "ROCm SHA256 hash verification failed after retry! Expected {{ roc_expected_sha256.stdout }}"
+
+    - name: Copy ROCm package to managed node
+      when: install_required or roc_install_required
+      copy:
+        src: "{{ control_node_download_dir }}/ollama-{{ latest_version }}-linux-amd64-rocm.tar.zst"
+        dest: "{{ roc_managed_node_download_path }}"
+        mode: '0644'
+
+    - name: Extract ROCm binary to correct location
+      when: install_required or roc_install_required
+      shell: |
+        tar -C /usr/local --zstd -xf "{{ roc_managed_node_download_path }}"
+        chmod 755 "{{ install_path }}/ollama"
+      args:
+        executable: /bin/bash
+
+    - name: Set ownership of ROCm binary
+      when: install_required or roc_install_required
+      file:
+        path: "{{ install_path }}/ollama"
+        owner: ollama
+        group: ollama
+        mode: '0755'
+
+    - name: Clean up ROCm package from managed node
+      when: install_required or roc_install_required
+      file:
+        path: "{{ roc_managed_node_download_path }}"
+        state: absent
 
   handlers:
     - name: Reload systemd
