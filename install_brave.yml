@@ -1,45 +1,181 @@
 ---
-- name: Install Brave browser
+- name: Manage Brave Origin (Nightly/Beta)
   hosts: all
   become: yes
+  vars:
+    brave_channel: "beta"
+
   tasks:
-    # Brave Browser Installation
-    - name: Check if Brave browser is installed
-      ansible.builtin.command: which brave-browser
-      register: brave_check
+    - name: Validate brave_channel
+      ansible.builtin.assert:
+        that:
+          - brave_channel in ['beta', 'nightly']
+        fail_msg: "brave_channel must be 'beta' or 'nightly', got '{{ brave_channel }}'"
+
+    - name: Set package manager state
+      ansible.builtin.shell:
+        cmd: dpkg --configure -a
+      changed_when: false
       failed_when: false
+
+    - name: Clean up old Brave APT repo files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/brave-browser.list
+        - /etc/apt/sources.list.d/brave-browser-beta.list
+        - /etc/apt/sources.list.d/brave-browser-nightly.list
+        - /etc/apt/sources.list.d/brave-browser-release.list
+        - /etc/apt/sources.list.d/brave-browser-release.sources
+        - /etc/apt/sources.list.d/brave-browser-beta.sources
+        - /etc/apt/sources.list.d/brave-browser-nightly.sources
+        - /usr/share/keyrings/brave-browser-archive-keyring.gpg
+        - /usr/share/keyrings/brave-browser-beta-archive-keyring.gpg
+        - /usr/share/keyrings/brave-browser-nightly-archive-keyring.gpg
+
+    - name: Remove old regular Brave browser packages
+      ansible.builtin.apt:
+        name:
+          - brave-browser
+          - brave-browser-beta
+          - brave-browser-nightly
+        state: absent
+        purge: yes
+
+    - name: Install curl
+      ansible.builtin.apt:
+        name: curl
+        state: present
+        update_cache: yes
+
+    - name: Gather package facts
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: Define Brave Origin variables
+      ansible.builtin.set_fact:
+        brave_package: "brave-origin-{{ brave_channel }}"
+        brave_binary: "brave-origin-{{ brave_channel }}"
+        brave_desktop: "brave-origin-{{ brave_channel }}.desktop"
+        brave_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+    - name: Detect currently installed Brave Origin
+      ansible.builtin.set_fact:
+        current_package: >-
+          {%- if 'brave-origin-nightly' in ansible_facts.packages -%}
+            brave-origin-nightly
+          {%- elif 'brave-origin-beta' in ansible_facts.packages -%}
+            brave-origin-beta
+          {%- else -%}
+            none
+          {%- endif -%}
+        current_version: >-
+          {%- if 'brave-origin-nightly' in ansible_facts.packages -%}
+            {{ ansible_facts.packages['brave-origin-nightly'][0].version }}
+          {%- elif 'brave-origin-beta' in ansible_facts.packages -%}
+            {{ ansible_facts.packages['brave-origin-beta'][0].version }}
+          {%- else -%}
+            none
+          {%- endif -%}
+
+    - name: Fetch Brave Origin releases from GitHub API
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/brave/brave-browser/releases?per_page=60"
+        return_content: yes
+        headers:
+          Accept: "application/vnd.github.v3+json"
+      register: github_response
+      retries: 3
+      delay: 2
+
+    - name: Write releases JSON to temp file
+      ansible.builtin.copy:
+        content: "{{ github_response.content }}"
+        dest: /tmp/brave_releases.json
+        mode: '0644'
       changed_when: false
 
-    - name: Install Brave browser prerequisites
-      block:
-        - name: Install curl
-          ansible.builtin.apt:
-            name: curl
-            state: present
+    - name: Find latest Brave Origin {{ brave_channel }} release
+      ansible.builtin.shell: |
+        set -e
+        python3 -c "
+        import json
+        channel = '{{ brave_channel }}'
+        arch = '{{ brave_arch }}'
+        with open('/tmp/brave_releases.json') as f:
+            releases = json.load(f)
+        for r in releases:
+            tag = r['tag_name'].lstrip('v')
+            target = f'brave-origin-{channel}_{tag}_{arch}.deb'
+            for a in r.get('assets', []):
+                if a['name'] == target:
+                    print(f'version={tag}')
+                    print(f'url={a[\"browser_download_url\"]}')
+                    exit(0)
+        print('ERROR: no matching release found', file=__import__('sys').stderr)
+        exit(1)
+        "
+      register: release_cmd
+      changed_when: false
 
-        - name: Add Brave browser repository key
-          ansible.builtin.apt_key:
-            url: https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
-            state: present
+    - name: Parse version and download URL
+      ansible.builtin.set_fact:
+        latest_version: "{{ release_cmd.stdout_lines[0].split('=', 1)[1] }}"
+        download_url: "{{ release_cmd.stdout_lines[1].split('=', 1)[1] }}"
 
-        - name: Add Brave browser repository
-          ansible.builtin.apt_repository:
-            repo: "deb [arch=amd64] https://brave-browser-apt-release.s3.brave.com/ stable main"
-            state: present
-            filename: brave-browser
+    - name: Determine if channel switch is needed
+      ansible.builtin.set_fact:
+        needs_switch: "{{ current_package != 'none' and current_package != brave_package }}"
 
-        - name: Update apt cache after adding Brave repo
-          ansible.builtin.apt:
-            update_cache: yes
-            cache_valid_time: 3600
+    - name: Determine if upgrade is needed
+      ansible.builtin.set_fact:
+        needs_upgrade: "{{ current_version != 'none' and current_version is version(latest_version, '<') }}"
 
-        - name: Install Brave browser
-          ansible.builtin.apt:
-            name: brave-browser
-            state: present
-      when: brave_check.rc != 0
+    - name: Remove current Brave Origin when switching channels
+      ansible.builtin.apt:
+        name:
+          - brave-origin-nightly
+          - brave-origin-beta
+        state: absent
+        purge: yes
+      when: needs_switch
 
-    - name: Display Brave status
-      ansible.builtin.debug:
-        msg: "{{ 'Brave browser installed' if brave_check.rc == 0 else 'Brave browser was just installed' }}"
+    - name: Download Brave Origin {{ brave_channel }} {{ latest_version }}
+      ansible.builtin.get_url:
+        url: "{{ download_url }}"
+        dest: "/tmp/brave-origin-{{ brave_channel }}.deb"
+        mode: '0644'
+        force: yes
+      when: current_package == 'none' or needs_switch or needs_upgrade
 
+    - name: Install Brave Origin {{ brave_channel }}
+      ansible.builtin.apt:
+        deb: "/tmp/brave-origin-{{ brave_channel }}.deb"
+        state: present
+      when: current_package == 'none' or needs_switch or needs_upgrade
+
+    - name: Register Brave Origin as system default browser
+      ansible.builtin.alternatives:
+        name: x-www-browser
+        link: /usr/bin/x-www-browser
+        path: "/usr/bin/{{ brave_binary }}"
+        priority: 100
+
+    - name: Set Brave Origin as user default web browser
+      ansible.builtin.shell:
+        cmd: "xdg-settings set default-web-browser {{ brave_desktop }}"
+      become: yes
+      become_user: "{{ ansible_user }}"
+      register: xdg_result
+      changed_when:
+        - xdg_result.rc == 0
+        - '"already" not in xdg_result.stderr | default("")'
+      failed_when: false
+
+    - name: Clean up temp files
+      ansible.builtin.file:
+        path:
+          - /tmp/brave_releases.json
+          - "/tmp/brave-origin-{{ brave_channel }}.deb"
+        state: absent

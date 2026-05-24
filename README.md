@@ -14,7 +14,7 @@ Infrastructure automation for managing multiple Linux hosts.
 |----------|-------------|---------|
 | `install_ollama.yml` | Install/update Ollama LLM runtime with AMD ROCm GPU support. Downloads to control node, then deploys to managed nodes. | `ansible-playbook -i inventory.yml install_ollama.yml --ask-become-pass` |
 | `basic_packages.yml` | Install git, htop, terminator, vim, gawk, jq, vlc, xclip, rustc | `ansible-playbook -i inventory.yml basic_packages.yml --ask-become-pass` |
-| `install_brave.yml` | Install Brave browser | `ansible-playbook -i inventory.yml install_brave.yml --ask-become-pass` |
+| `install_brave.yml` | Install Brave Origin (beta/nightly). Channel controlled by `brave_channel` variable. | `ansible-playbook -i inventory.yml install_brave.yml --ask-become-pass` |
 | `install_docker.yml` | Install Docker and Docker Compose | `ansible-playbook -i inventory.yml install_docker.yml --ask-become-pass` |
 | `install_newsboat.yml` | Install Newsboat RSS reader | `ansible-playbook -i inventory.yml install_newsboat.yml --ask-become-pass` |
 | `install_vagrant.yml` | Install Vagrant | `ansible-playbook -i inventory.yml install_vagrant.yml --ask-become-pass` |
@@ -22,6 +22,8 @@ Infrastructure automation for managing multiple Linux hosts.
 | `install_vscode.yml` | Install Visual Studio Code | `ansible-playbook -i inventory.yml install_vscode.yml --ask-become-pass` |
 | `install_yt-dlp.yml` | Install yt-dlp video downloader | `ansible-playbook -i inventory.yml install_yt-dlp.yml --ask-become-pass` |
 | `install_moosefs.yml` | Install MooseFS distributed filesystem (deprecated) | `ansible-playbook -i inventory.yml install_moosefs.yml --ask-become-pass` |
+
+> **Brave Origin channels**: `-e brave_channel=beta` (default) or `-e brave_channel=nightly`. Installs via direct `.deb` from GitHub releases — no APT repo added.
 
 ### Configuration Playbooks
 
