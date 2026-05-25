@@ -1,0 +1,71 @@
+---
+- name: Install vimark - Vim + Markdown live viewer
+  hosts: all
+  become: yes
+  vars:
+    vimark_repo: "git@github.com:gilflorida2023/vimark.git"
+    vimark_dir: "~{{ ansible_user }}/projects/vimark"
+
+  pre_tasks:
+    - name: Skip control host
+      ansible.builtin.fail:
+        msg: "This playbook should run on target machines, not the control host"
+      when: is_control_host is defined and is_control_host
+
+  tasks:
+    - name: Install Qt6 system dependencies
+      ansible.builtin.apt:
+        name:
+          - libxcb-cursor0
+          - libxkbcommon-x11-0
+          - qt6-base-dev
+          - libqt6webenginecore6
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install pipx
+      ansible.builtin.apt:
+        name: pipx
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Clone vimark repository
+      ansible.builtin.git:
+        repo: "{{ vimark_repo }}"
+        dest: "{{ vimark_dir }}"
+        update: no
+        accept_hostkey: yes
+        key_file: "~{{ ansible_user }}/.ssh/id_rsa"
+      become: no
+      register: git_clone_result
+      ignore_errors: yes
+
+    - name: Warn if git clone failed
+      ansible.builtin.debug:
+        msg: |
+          Git clone failed - SSH key may not be set up for GitHub.
+          Ensure the SSH public key for '{{ ansible_user }}' on {{ inventory_hostname }}
+          is added to GitHub: https://github.com/settings/keys
+      when: git_clone_result is failed
+
+    - name: Check if vimark is installed via pipx
+      ansible.builtin.command: pipx list
+      register: pipx_list
+      changed_when: false
+      become: no
+
+    - name: Install vimark via pipx
+      ansible.builtin.command:
+        cmd: pipx install "{{ vimark_dir }}"
+      become: no
+      when: "'vimark' not in pipx_list.stdout"
+
+    - name: Ensure ~/.local/bin is in PATH in .bashrc
+      ansible.builtin.lineinfile:
+        path: ".bashrc"
+        regex: '^export PATH="\$HOME/\.local/bin:\$PATH"$'
+        line: 'export PATH="$HOME/.local/bin:$PATH"'
+        create: yes
+        state: present
+      become: no
