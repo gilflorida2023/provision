@@ -1,0 +1,111 @@
+---
+- hosts: all
+  gather_facts: true
+
+  vars:
+    larql_repo: https://github.com/chrishayuk/larql
+    larql_dir: "{{ ansible_user_dir }}/projects/larql"
+    larql_bin: "{{ ansible_user_dir }}/.cargo/bin/larql"
+    cargo_build_jobs: 4
+
+  tasks:
+    - name: Check if larql binary already exists
+      stat:
+        path: "{{ larql_bin }}"
+      register: larql_bin_stat
+
+    - name: Check installed larql version
+      command: "{{ larql_bin }} --version"
+      register: larql_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Check if Rust/Cargo is installed
+      command: cargo --version
+      register: cargo_check
+      changed_when: false
+      failed_when: false
+
+    - name: Determine if install/upgrade is needed
+      set_fact:
+        larql_install_needed: "{{ not larql_bin_stat.stat.exists or larql_ver.rc != 0 }}"
+
+    - name: Install git and curl
+      apt:
+        name:
+          - git
+          - curl
+        state: present
+        update_cache: yes
+      become: yes
+      when: larql_install_needed
+
+    - name: Install build dependencies
+      apt:
+        name:
+          - pkg-config
+          - libssl-dev
+          - protobuf-compiler
+          - cmake
+          - g++
+          - libopenblas-dev
+        state: present
+        update_cache: yes
+      become: yes
+      when: larql_install_needed
+
+    - name: Install Rust toolchain via rustup
+      shell: >
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs
+        | sh -s -- -y
+      args:
+        creates: "{{ ansible_user_dir }}/.cargo/bin/rustup"
+      when:
+        - larql_install_needed
+        - cargo_check.rc != 0
+
+    - name: Clone or pull latest larql repository
+      git:
+        repo: "{{ larql_repo }}"
+        dest: "{{ larql_dir }}"
+        force: yes
+      register: larql_repo_status
+
+    - name: Build larql from source
+      command:
+        cmd: >
+          {{ ansible_user_dir }}/.cargo/bin/cargo build --release -p larql-cli
+          --jobs {{ cargo_build_jobs | int }}
+        chdir: "{{ larql_dir }}"
+      when: larql_install_needed or larql_repo_status.changed
+      register: larql_build
+
+    - name: Ensure ~/.cargo/bin exists
+      file:
+        path: "{{ ansible_user_dir }}/.cargo/bin"
+        state: directory
+        mode: "0755"
+
+    - name: Copy larql binary to ~/.cargo/bin/
+      copy:
+        src: "{{ larql_dir }}/target/release/larql"
+        dest: "{{ larql_bin }}"
+        mode: "0755"
+        remote_src: yes
+      when: larql_install_needed or larql_repo_status.changed
+
+    - name: Add ~/.cargo/bin to PATH in .bashrc
+      lineinfile:
+        path: "{{ ansible_user_dir }}/.bashrc"
+        line: 'export PATH="$HOME/.cargo/bin:$PATH"'
+        regexp: 'export PATH=.*\.cargo/bin'
+        state: present
+
+    - name: Verify installation
+      command: "{{ larql_bin }} --version"
+      register: larql_ver_final
+      changed_when: false
+
+    - name: Print result
+      debug:
+        msg: "larql {{ larql_ver_final.stdout }}"
