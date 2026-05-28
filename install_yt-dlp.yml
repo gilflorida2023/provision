@@ -1,11 +1,77 @@
 ---
-- name: Install latest yt-dlp binary and remove old version
+- name: Prepare yt-dlp binary on control host
   hosts: localhost
+  become: false
+  vars:
+    staging_path: "/tmp/yt-dlp-install"
+
+  tasks:
+    - name: Get latest release info from GitHub API
+      uri:
+        url: https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest
+        method: GET
+        return_content: yes
+      register: release_info
+      changed_when: false
+
+    - name: Set latest_version fact
+      set_fact:
+        latest_version: "{{ release_info.json.tag_name }}"
+
+    - name: Download SHA2-256SUMS for checksum verification
+      uri:
+        url: "https://github.com/yt-dlp/yt-dlp/releases/download/{{ latest_version }}/SHA2-256SUMS"
+        method: GET
+        return_content: yes
+      register: checksums
+      changed_when: false
+
+    - name: Extract sha256 hash for yt-dlp binary
+      set_fact:
+        ytdlp_sha256: >-
+          {{ (checksums.content
+              | regex_findall('^\s*([a-f0-9]{64})\s+yt-dlp\s*$', multiline=True)
+              | first | default('')) }}
+
+    - name: Ensure staging directory exists
+      file:
+        path: "{{ staging_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Download yt-dlp binary to staging
+      get_url:
+        url: "https://github.com/yt-dlp/yt-dlp/releases/download/{{ latest_version }}/yt-dlp"
+        dest: "{{ staging_path }}/yt-dlp"
+        mode: '0755'
+        checksum: "sha256:{{ ytdlp_sha256 }}"
+
+- name: Install yt-dlp on all hosts
+  hosts: all
   become: true
   vars:
     bin_path: "/usr/local/bin/yt-dlp"
-    
+    staging_path: "/tmp/yt-dlp-install"
+
   tasks:
+    - name: Check if yt-dlp binary exists on target
+      stat:
+        path: "{{ bin_path }}"
+      register: bin_stat
+
+    - name: Get current installed version on target
+      command: "{{ bin_path }} --version"
+      register: current_version
+      changed_when: false
+      when: bin_stat.stat.exists
+
+    - name: Determine if update is needed
+      set_fact:
+        update_needed: >-
+          {{ not bin_stat.stat.exists
+             or current_version is not defined
+             or current_version.stdout != hostvars['localhost']['latest_version'] }}
+
     - name: Remove old yt-dlp version installed via apt
       package:
         name: yt-dlp
@@ -16,28 +82,19 @@
         path: /usr/bin/yt-dlp
         state: absent
 
-    - name: Get latest release info from GitHub API
-      uri:
-        url: https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest
-        method: GET
-        return_content: yes
-      register: release_info
-      changed_when: false
-
-    - name: Extract latest version tag
-      set_fact:
-        latest_version: "{{ release_info.json.tag_name }}"
-
-    - name: Debug latest version
-      debug:
-        msg: "Latest yt-dlp version: {{ latest_version }}"
-
-    - name: Download yt-dlp binary
-      get_url:
-        url: "https://github.com/yt-dlp/yt-dlp/releases/download/{{ latest_version }}/yt-dlp"
+    - name: Copy binary from control host to target
+      copy:
+        src: "{{ staging_path }}/yt-dlp"
         dest: "{{ bin_path }}"
         mode: '0755'
-        force: yes
+      when: update_needed
+
+    - name: Verify binary sha256sum on target
+      command: "sha256sum {{ bin_path }}"
+      register: sha_result
+      changed_when: false
+      failed_when: sha_result.stdout.split()[0] != hostvars['localhost']['ytdlp_sha256']
+      when: update_needed
 
     - name: Verify installation
       command: "{{ bin_path }} --version"
@@ -52,10 +109,12 @@
       command: which yt-dlp
       register: which_ytdlp
       changed_when: false
+      ignore_errors: yes
 
     - name: Display which yt-dlp is being used
       debug:
         msg: "yt-dlp command is pointing to: {{ which_ytdlp.stdout }}"
+      when: which_ytdlp is succeeded
 
     - name: Warn user about shell hash
       debug:

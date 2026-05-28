@@ -7,6 +7,7 @@ all:
       ansible_user: second
       ansible_ssh_private_key_file: ~/.ssh/id_rsa
       ansible_python_interpreter: /usr/bin/python3
+      is_control_host: true 
        
 
     #fast:
@@ -20,7 +21,6 @@ all:
       ansible_user: first
       ansible_ssh_private_key_file: ~/.ssh/id_rsa
       ansible_python_interpreter: /usr/bin/python3
-      is_control_host: true 
 
 #    m4:
 #      ansible_host: 192.168.0.7
