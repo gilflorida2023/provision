@@ -1,15 +1,26 @@
 ---
-- name: Simple LMDE 6 security updates
+- name: Unattended security upgrades
   hosts: all
-  become: true
-  
-  tasks:
-    - name: Update package list
-      apt:
-        update_cache: yes
+  become: yes
 
-    - name: Upgrade security packages only
-      apt:
-        upgrade: safe
-        autoremove: yes
-        autoclean: yes
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install unattended-upgrades
+      ansible.builtin.apt:
+        name: unattended-upgrades
+        state: present
+
+    # - name: Dry-run (recommended to test before applying)
+    #   ansible.builtin.command:
+    #     cmd: unattended-upgrades --dry-run --debug
+    #   changed_when: false
+
+    - name: Apply security upgrades
+      ansible.builtin.command:
+        cmd: unattended-upgrades
+      register: unattended_result
+      changed_when: "'will be upgraded' in (unattended_result.stdout + unattended_result.stderr)"
