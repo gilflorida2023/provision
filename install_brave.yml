@@ -49,6 +49,34 @@
         state: present
         update_cache: yes
 
+    - name: Define Brave Origin architecture
+      ansible.builtin.set_fact:
+        brave_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+    - name: Add Brave apt repository keyring
+      ansible.builtin.get_url:
+        url: "https://brave-browser-apt-{{ brave_channel }}.s3.brave.com/brave-browser-{{ brave_channel }}-archive-keyring.gpg"
+        dest: "/usr/share/keyrings/brave-browser-{{ brave_channel }}-archive-keyring.gpg"
+        mode: '0644'
+
+    - name: Add Brave apt repository
+      ansible.builtin.copy:
+        dest: "/etc/apt/sources.list.d/brave-browser-{{ brave_channel }}.sources"
+        content: |
+          Types: deb
+          URIs: https://brave-browser-apt-{{ brave_channel }}.s3.brave.com/
+          Suites: stable
+          Architectures: {{ brave_arch }}
+          Components: main
+          Signed-By: /usr/share/keyrings/brave-browser-{{ brave_channel }}-archive-keyring.gpg
+        mode: '0644'
+
+    - name: Install brave-keyring dependency
+      ansible.builtin.apt:
+        name: brave-keyring
+        state: present
+        update_cache: yes
+
     - name: Gather package facts
       ansible.builtin.package_facts:
         manager: apt
@@ -58,7 +86,6 @@
         brave_package: "brave-origin-{{ brave_channel }}"
         brave_binary: "brave-origin-{{ brave_channel }}"
         brave_desktop: "brave-origin-{{ brave_channel }}.desktop"
-        brave_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
 
     - name: Detect currently installed Brave Origin
       ansible.builtin.set_fact:

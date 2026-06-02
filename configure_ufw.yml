@@ -17,23 +17,19 @@
         direction: incoming
         policy: deny
 
-    - name: Allow SSH (port 22) from each inventory host
+    - name: Allow SSH (port 22) from subnet
       ansible.builtin.ufw:
         rule: allow
-        from_ip: "{{ hostvars[item].ansible_host }}"
+        from_ip: 192.168.0.0/24
         port: 22
         proto: tcp
-      loop: "{{ groups['all'] }}"
-      when: hostvars[item].ansible_host is defined
 
-    - name: Allow port 11434 from each inventory host
+    - name: Allow port 11434 from subnet
       ansible.builtin.ufw:
         rule: allow
-        from_ip: "{{ hostvars[item].ansible_host }}"
+        from_ip: 192.168.0.0/24
         port: 11434
         proto: tcp
-      loop: "{{ groups['all'] }}"
-      when: hostvars[item].ansible_host is defined
 
     - name: Allow port 11434 from localhost (127.0.0.1)
       ansible.builtin.ufw:
