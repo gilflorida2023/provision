@@ -1,0 +1,174 @@
+---
+- name: Install Docker and deploy Open WebUI
+  hosts: all
+  become: yes
+  vars:
+    docker_user: docker
+    docker_repo_arch: "amd64"
+    docker_repo_codename: "bookworm"
+
+    openwebui_compose_dir: /opt/open-webui
+    openwebui_host_port: 3000
+    openwebui_container_port: 8080
+    openwebui_bind_address: "{{ ansible_default_ipv4.address }}"
+    openwebui_volume_name: open-webui
+    openwebui_rag_web_search: true
+    openwebui_rag_web_search_engine: duckduckgo
+    openwebui_rag_web_search_result_count: 5
+    openwebui_state: started  # started | absent
+
+  tasks:
+    - name: Create docker system user
+      user:
+        name: "{{ docker_user }}"
+        system: yes
+        shell: /bin/false
+        create_home: no
+        state: present
+
+    - name: Check if Docker is installed
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Install Docker
+      when: docker_check is failed
+      block:
+        - name: Install prerequisites
+          apt:
+            name:
+              - ca-certificates
+              - curl
+              - gnupg
+            state: present
+            update_cache: yes
+
+        - name: Create keyrings directory
+          file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: '0755'
+
+        - name: Add Docker GPG key
+          get_url:
+            url: https://download.docker.com/linux/debian/gpg
+            dest: /etc/apt/keyrings/docker.asc
+            mode: '0644'
+
+        - name: Add Docker repository
+          apt_repository:
+            repo: "deb [arch={{ docker_repo_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian {{ docker_repo_codename }} stable"
+            state: present
+            filename: docker
+            update_cache: no
+
+        - name: Update apt cache
+          apt:
+            update_cache: yes
+            cache_valid_time: 3600
+
+        - name: Install Docker packages
+          apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+              - docker-buildx-plugin
+              - docker-compose-plugin
+            state: present
+            update_cache: yes
+
+        - name: Ensure Docker service started and enabled
+          systemd:
+            name: docker
+            state: started
+            enabled: yes
+
+    - name: Add docker user to docker group
+      user:
+        name: "{{ docker_user }}"
+        groups: docker
+        append: yes
+
+    - name: Get latest Open WebUI version from GitHub
+      delegate_to: localhost
+      run_once: true
+      become: false
+      uri:
+        url: https://api.github.com/repos/open-webui/open-webui/releases/latest
+        method: GET
+        headers:
+          Accept: application/vnd.github+json
+      register: openwebui_release
+
+    - name: Extract latest version tag
+      run_once: true
+      set_fact:
+        openwebui_version_tag: "{{ openwebui_release.json.tag_name }}"
+        openwebui_image: "ghcr.io/open-webui/open-webui:{{ openwebui_release.json.tag_name }}"
+
+    - name: Create Open WebUI directory
+      file:
+        path: "{{ openwebui_compose_dir }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ docker_user }}"
+        group: "{{ docker_user }}"
+
+    - name: Deploy docker-compose.yml
+      copy:
+        dest: "{{ openwebui_compose_dir }}/docker-compose.yml"
+        content: |
+          ---
+          services:
+            open-webui:
+              image: {{ openwebui_image }}
+              container_name: open-webui
+              ports:
+                - "{{ openwebui_bind_address }}:{{ openwebui_host_port }}:{{ openwebui_container_port }}"
+              volumes:
+                - {{ openwebui_volume_name }}:/app/backend/data
+              environment:
+                ENABLE_RAG_WEB_SEARCH: "{{ openwebui_rag_web_search | string }}"
+                RAG_WEB_SEARCH_ENGINE: "{{ openwebui_rag_web_search_engine }}"
+                RAG_WEB_SEARCH_RESULT_COUNT: "{{ openwebui_rag_web_search_result_count | string }}"
+              extra_hosts:
+                - "host.docker.internal:host-gateway"
+              restart: always
+              security_opt:
+                - "no-new-privileges:true"
+          volumes:
+            {{ openwebui_volume_name }}:
+        mode: '0644'
+        owner: "{{ docker_user }}"
+        group: "{{ docker_user }}"
+
+    - name: Pull Open WebUI image
+      command:
+        cmd: docker compose pull
+        chdir: "{{ openwebui_compose_dir }}"
+      register: pull_result
+      changed_when: "'Downloaded' in pull_result.stdout or 'Pulled' in pull_result.stdout"
+      when: openwebui_state == "started"
+
+    - name: Start Open WebUI
+      command:
+        cmd: docker compose up -d
+        chdir: "{{ openwebui_compose_dir }}"
+      register: up_result
+      changed_when: "'Created' in up_result.stdout or 'Recreated' in up_result.stdout or 'Started' in up_result.stdout"
+      when: openwebui_state == "started"
+
+    - name: Show Open WebUI URL
+      debug:
+        msg: "Open WebUI available at http://{{ openwebui_bind_address }}:{{ openwebui_host_port }}"
+      when: openwebui_state == "started"
+
+    - name: Stop and remove Open WebUI
+      command:
+        cmd: docker compose down -v --rmi all
+        chdir: "{{ openwebui_compose_dir }}"
+      register: down_result
+      changed_when: down_result.rc == 0
+      when: openwebui_state == "absent"

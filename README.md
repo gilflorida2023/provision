@@ -22,6 +22,7 @@ Infrastructure automation for managing multiple Linux hosts.
 | `install_vscode.yml` | Install Visual Studio Code | `ansible-playbook -i inventory.yml install_vscode.yml --ask-become-pass` |
 | `install_yt-dlp.yml` | Install yt-dlp video downloader | `ansible-playbook -i inventory.yml install_yt-dlp.yml --ask-become-pass` |
 | `install_moosefs.yml` | Install MooseFS distributed filesystem (deprecated) | `ansible-playbook -i inventory.yml install_moosefs.yml --ask-become-pass` |
+| `install_openwebui.yml` | Install Docker (if needed) and deploy Open WebUI via Docker Compose. Creates dedicated `docker` system user. Pins to latest GA release from GitHub. | `ansible-playbook -i inventory.yml install_openwebui.yml --ask-become-pass` |
 
 > **Brave Origin channels**: `-e brave_channel=beta` (default) or `-e brave_channel=nightly`. Installs via direct `.deb` from GitHub releases — no APT repo added.
 
