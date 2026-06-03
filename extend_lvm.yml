@@ -1,0 +1,181 @@
+---
+- name: Add disk to LVM and extend root volume
+  hosts: all
+  become: yes
+  vars:
+    lvm_disk_device: ""
+    lvm_force: false
+
+  tasks:
+    - name: Install required packages
+      apt:
+        name:
+          - parted
+          - lvm2
+        state: present
+        update_cache: yes
+
+    # ---------------------------------------------------------------------------
+    # Detect the LVM volume group and logical volume that holds /
+    # ---------------------------------------------------------------------------
+    - name: Get root device path
+      command: findmnt -n -o SOURCE /
+      register: root_dev
+      changed_when: false
+
+    - name: Parse VG and LV names from /dev/mapper/ path
+      set_fact:
+        vg_name: "{{ root_dev.stdout.strip() | regex_replace('^/dev/mapper/(.+)-(.+)$', '\\1') }}"
+        lv_name: "{{ root_dev.stdout.strip() | regex_replace('^/dev/mapper/(.+)-(.+)$', '\\2') }}"
+        root_lv: "{{ root_dev.stdout.strip() }}"
+      when: root_dev.stdout.strip() is match('/dev/mapper/')
+
+    - name: Resolve VG and LV from dm device node
+      block:
+        - name: Query LVM for dm device mapping
+          command: lvs --noheadings -o vg_name,lv_path "{{ root_dev.stdout.strip() }}"
+          register: lvs_info
+          changed_when: false
+        - name: Set VG/LV facts from lvs output
+          set_fact:
+            vg_name: "{{ lvs_info.stdout.split()[0] }}"
+            lv_name: "{{ lvs_info.stdout.split()[1] | basename }}"
+            root_lv: "{{ lvs_info.stdout.split()[1] }}"
+      when: root_dev.stdout.strip() is match('/dev/dm-')
+
+    - name: Fail if LVM detection failed
+      fail:
+        msg: >
+          Root device "{{ root_dev.stdout.strip() }}" does not appear to be
+          an LVM logical volume. This playbook requires an LVM-based root
+          filesystem.
+      when: vg_name is not defined
+
+    - name: Get root disk (parent physical device)
+      command: lsblk -ndo PKNAME "{{ root_lv }}"
+      register: root_disk_raw
+      changed_when: false
+
+    - name: Set root disk fact
+      set_fact:
+        root_disk: "/dev/{{ root_disk_raw.stdout.strip() }}"
+
+    # ---------------------------------------------------------------------------
+    # Discover existing LVM physical volumes and VG free space
+    # ---------------------------------------------------------------------------
+    - name: Get existing physical volumes
+      command: pvs --noheadings -o pv_name
+      register: pvs_out
+      changed_when: false
+
+    - name: Build list of devices already used as LVM PVs
+      set_fact:
+        pv_devices: "{{ pvs_out.stdout_lines | map('trim') | list }}"
+
+    # ---------------------------------------------------------------------------
+    # Select candidate disk
+    # ---------------------------------------------------------------------------
+    - name: Auto-detect unused disk
+      block:
+        - name: List available block devices
+          command: lsblk -dno NAME
+          register: disks_out
+          changed_when: false
+        - name: Pick first non-root, non-virtual disk
+          set_fact:
+            candidate_disk: >-
+              /dev/{{
+                disks_out.stdout_lines
+                | reject('search', 'loop|sr|zd|dm-')
+                | select('match', '^[a-z]+$')
+                | reject('equalto', root_disk | basename)
+                | first
+              }}
+      when: not lvm_disk_device
+
+    - name: Use user-specified disk
+      set_fact:
+        candidate_disk: "{{ lvm_disk_device }}"
+      when: lvm_disk_device
+
+    - name: Fail if no candidate disk is available
+      fail:
+        msg: >
+          No unused disk was found and lvm_disk_device was not set.
+          Either add a second disk to this host or pass
+          -e lvm_disk_device=/dev/sdX on the command line.
+      when: candidate_disk is not defined or not candidate_disk
+
+    - name: Fail if candidate disk is the root disk
+      fail:
+        msg: >
+          Candidate disk "{{ candidate_disk }}" appears to be the root disk
+          "{{ root_disk }}". Refusing to proceed.
+      when: candidate_disk == root_disk
+
+    - name: Check that candidate is a block device
+      command: test -b "{{ candidate_disk }}"
+      changed_when: false
+
+    # ---------------------------------------------------------------------------
+    # Provision the candidate disk for LVM
+    # ---------------------------------------------------------------------------
+    - name: Set partition device path
+      set_fact:
+        pv_partition: "{{ candidate_disk }}1"
+
+    - name: Check if candidate disk already contributes a PV to the VG
+      set_fact:
+        disk_has_lvm: "{{ pv_devices | select('search', candidate_disk) | list | length > 0 }}"
+
+    - name: Provision new disk for LVM
+      when: not disk_has_lvm
+      block:
+        - name: Wipe existing filesystem and partition signatures
+          command: wipefs -a "{{ candidate_disk }}"
+
+        - name: Create GPT partition table
+          command: parted -s "{{ candidate_disk }}" mklabel gpt
+
+        - name: Create primary partition covering the whole disk
+          command: parted -s "{{ candidate_disk }}" mkpart primary 0% 100%
+
+        - name: Set LVM partition type flag
+          command: parted -s "{{ candidate_disk }}" set 1 lvm on
+
+        - name: Wait for kernel to detect new partition
+          command: udevadm settle
+
+    - name: Create physical volume on partition
+      command: pvcreate -f "{{ pv_partition }}"
+      when: not disk_has_lvm
+
+    - name: Extend volume group with new physical volume
+      command: vgextend "{{ vg_name }}" "{{ pv_partition }}"
+      when: not disk_has_lvm
+
+    # ---------------------------------------------------------------------------
+    # Extend root logical volume and filesystem
+    # ---------------------------------------------------------------------------
+    - name: Get current free extent count in root VG
+      command: vgs --noheadings -o vg_free_count "{{ vg_name }}"
+      register: vg_free
+      changed_when: false
+      failed_when: false
+
+    - name: Extend root LV to consume all free space
+      command: lvextend -l +100%FREE "{{ root_lv }}"
+      when: (vg_free.stdout | default('0') | trim | int) > 0
+
+    - name: Detect root filesystem type
+      command: blkid -o value -s TYPE "{{ root_lv }}"
+      register: root_fs
+      changed_when: false
+
+    - name: Resize ext4 root filesystem
+      command: resize2fs "{{ root_lv }}"
+      when: root_fs.stdout == 'ext4'
+
+    - name: Resize xfs root filesystem
+      command: xfs_growfs /
+      when: root_fs.stdout == 'xfs'
