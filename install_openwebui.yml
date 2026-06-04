@@ -125,6 +125,7 @@
             open-webui:
               image: {{ openwebui_image }}
               container_name: open-webui
+              network_mode: bridge
               ports:
                 - "{{ openwebui_bind_address }}:{{ openwebui_host_port }}:{{ openwebui_container_port }}"
               volumes:
