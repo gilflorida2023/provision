@@ -154,6 +154,11 @@
       changed_when: "'Downloaded' in pull_result.stdout or 'Pulled' in pull_result.stdout"
       when: openwebui_state == "started"
 
+    - name: Remove existing Open WebUI container
+      command: docker rm -f open-webui
+      ignore_errors: yes
+      when: openwebui_state == "started"
+
     - name: Start Open WebUI
       command:
         cmd: docker compose up -d --force-recreate
