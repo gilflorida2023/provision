@@ -38,6 +38,13 @@
         port: 11434
         proto: tcp
 
+    - name: Allow port 11434 from Docker bridge network
+      ansible.builtin.ufw:
+        rule: allow
+        from_ip: 172.17.0.0/16
+        port: 11434
+        proto: tcp
+
     - name: Enable UFW
       ansible.builtin.ufw:
         state: enabled

@@ -133,6 +133,7 @@
                 ENABLE_RAG_WEB_SEARCH: "{{ openwebui_rag_web_search | string }}"
                 RAG_WEB_SEARCH_ENGINE: "{{ openwebui_rag_web_search_engine }}"
                 RAG_WEB_SEARCH_RESULT_COUNT: "{{ openwebui_rag_web_search_result_count | string }}"
+                OLLAMA_BASE_URL: "http://host.docker.internal:11434"
               extra_hosts:
                 - "host.docker.internal:host-gateway"
               restart: always
