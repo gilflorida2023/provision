@@ -156,7 +156,7 @@
 
     - name: Start Open WebUI
       command:
-        cmd: docker compose up -d
+        cmd: docker compose up -d --force-recreate
         chdir: "{{ openwebui_compose_dir }}"
       register: up_result
       changed_when: "'Created' in up_result.stdout or 'Recreated' in up_result.stdout or 'Started' in up_result.stdout"
