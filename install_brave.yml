@@ -4,6 +4,7 @@
   become: yes
   vars:
     brave_channel: "beta"
+    brave_temp_dir: "/var/tmp/brave-origin-ansible"
 
   tasks:
     - name: Validate brave_channel
@@ -48,6 +49,12 @@
         name: curl
         state: present
         update_cache: yes
+
+    - name: Ensure Brave Origin temp directory exists
+      ansible.builtin.file:
+        path: "{{ brave_temp_dir }}"
+        state: directory
+        mode: '0755'
 
     - name: Define Brave Origin architecture
       ansible.builtin.set_fact:
@@ -119,7 +126,7 @@
     - name: Write releases JSON to temp file
       ansible.builtin.copy:
         content: "{{ github_response.content }}"
-        dest: /tmp/brave_releases.json
+        dest: "{{ brave_temp_dir }}/brave_releases.json"
         mode: '0644'
       changed_when: false
 
@@ -130,7 +137,7 @@
         import json
         channel = '{{ brave_channel }}'
         arch = '{{ brave_arch }}'
-        with open('/tmp/brave_releases.json') as f:
+        with open('{{ brave_temp_dir }}/brave_releases.json') as f:
             releases = json.load(f)
         for r in releases:
             tag = r['tag_name'].lstrip('v')
@@ -171,14 +178,14 @@
     - name: Download Brave Origin {{ brave_channel }} {{ latest_version }}
       ansible.builtin.get_url:
         url: "{{ download_url }}"
-        dest: "/tmp/brave-origin-{{ brave_channel }}.deb"
+        dest: "{{ brave_temp_dir }}/brave-origin-{{ brave_channel }}.deb"
         mode: '0644'
         force: yes
       when: current_package == 'none' or needs_switch or needs_upgrade
 
     - name: Install Brave Origin {{ brave_channel }}
       ansible.builtin.apt:
-        deb: "/tmp/brave-origin-{{ brave_channel }}.deb"
+        deb: "{{ brave_temp_dir }}/brave-origin-{{ brave_channel }}.deb"
         state: present
       when: current_package == 'none' or needs_switch or needs_upgrade
 
@@ -202,7 +209,5 @@
 
     - name: Clean up temp files
       ansible.builtin.file:
-        path:
-          - /tmp/brave_releases.json
-          - "/tmp/brave-origin-{{ brave_channel }}.deb"
+        path: "{{ brave_temp_dir }}"
         state: absent
